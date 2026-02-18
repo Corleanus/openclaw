@@ -111,23 +111,6 @@ function detectSystemTimeFormat(): boolean {
     }
   }
 
-  if (process.platform === "win32") {
-    try {
-      const result = execSync(
-        'powershell -Command "(Get-Culture).DateTimeFormat.ShortTimePattern"',
-        { encoding: "utf8", timeout: 1000 },
-      ).trim();
-      if (result.startsWith("H")) {
-        return true;
-      }
-      if (result.startsWith("h")) {
-        return false;
-      }
-    } catch {
-      // Fall through
-    }
-  }
-
   try {
     const sample = new Date(2000, 0, 1, 13, 0);
     const formatted = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(sample);

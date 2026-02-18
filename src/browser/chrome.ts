@@ -224,6 +224,7 @@ export async function launchOpenClawChrome(
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
       },
+      ...(process.platform === "win32" ? { windowsHide: true } : {}),
     });
   };
 

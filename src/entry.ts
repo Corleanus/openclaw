@@ -43,6 +43,7 @@ function ensureExperimentalWarningSuppressed(): boolean {
   const child = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
     stdio: "inherit",
     env: process.env,
+    ...(process.platform === "win32" ? { windowsHide: true } : {}),
   });
 
   attachChildProcessBridge(child);

@@ -88,6 +88,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const agent = spawn(serverCommand, serverArgs, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
+    ...(process.platform === "win32" ? { windowsHide: true } : {}),
   });
 
   if (!agent.stdin || !agent.stdout) {

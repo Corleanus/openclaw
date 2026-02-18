@@ -134,6 +134,7 @@ export async function runCommandWithTimeout(
     env: resolvedEnv,
     windowsVerbatimArguments,
     ...(needsShellMediation(resolvedCmd) ? { shell: true } : {}),
+    ...(process.platform === "win32" ? { windowsHide: true } : {}),
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {

@@ -359,7 +359,10 @@ export async function runGmailService(opts: GmailRunOptions) {
 function spawnGogServe(cfg: GmailHookRuntimeConfig) {
   const args = buildGogWatchServeArgs(cfg);
   defaultRuntime.log(`Starting gog ${args.join(" ")}`);
-  return spawn("gog", args, { stdio: "inherit" });
+  return spawn("gog", args, {
+    stdio: "inherit",
+    ...(process.platform === "win32" ? { windowsHide: true } : {}),
+  });
 }
 
 async function startGmailWatch(

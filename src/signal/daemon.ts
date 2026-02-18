@@ -63,6 +63,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const args = buildDaemonArgs(opts);
   const child = spawn(opts.cliPath, args, {
     stdio: ["ignore", "pipe", "pipe"],
+    ...(process.platform === "win32" ? { windowsHide: true } : {}),
   });
   const log = opts.runtime?.log ?? (() => {});
   const error = opts.runtime?.error ?? (() => {});
