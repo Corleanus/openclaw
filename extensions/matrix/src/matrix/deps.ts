@@ -49,6 +49,7 @@ async function runFixedCommandWithTimeout(params: {
       cwd: params.cwd,
       env: { ...process.env, ...params.env },
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     let stdout = "";

@@ -1060,6 +1060,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       const child = spawn(resolveWindowsCommandShim(this.qmd.command), args, {
         env: this.env,
         cwd: this.workspaceDir,
+        windowsHide: true,
       });
       let stdout = "";
       let stderr = "";
@@ -1152,6 +1153,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
         env: this.env,
         cwd: this.workspaceDir,
+        windowsHide: true,
       });
       let stdout = "";
       let stderr = "";

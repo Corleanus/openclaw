@@ -105,6 +105,7 @@ function execText(
       timeout: timeoutMs,
       encoding: "utf8",
       maxBuffer,
+      windowsHide: true,
     });
     return String(output ?? "").trim() || null;
   } catch {

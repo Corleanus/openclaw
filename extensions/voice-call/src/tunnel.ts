@@ -61,6 +61,7 @@ export async function startNgrokTunnel(config: {
   return new Promise((resolve, reject) => {
     const proc = spawn("ngrok", args, {
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     let resolved = false;
@@ -165,6 +166,7 @@ async function runNgrokCommand(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn("ngrok", args, {
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     let stdout = "";
@@ -196,6 +198,7 @@ export async function isNgrokAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
     const proc = spawn("ngrok", ["version"], {
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     proc.on("close", (code) => {
@@ -228,6 +231,7 @@ export async function startTailscaleTunnel(config: {
   return new Promise((resolve, reject) => {
     const proc = spawn("tailscale", [config.mode, "--bg", "--yes", "--set-path", path, localUrl], {
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     const timeout = setTimeout(() => {
@@ -267,6 +271,7 @@ async function stopTailscaleTunnel(mode: "serve" | "funnel", path: string): Prom
   return new Promise((resolve) => {
     const proc = spawn("tailscale", [mode, "off", path], {
       stdio: "ignore",
+      windowsHide: true,
     });
 
     const timeout = setTimeout(() => {

@@ -71,6 +71,7 @@ async function resolveNodeVersion(
   try {
     const { stdout } = await execFileImpl(nodePath, ["-p", "process.versions.node"], {
       encoding: "utf8",
+      windowsHide: true,
     });
     const value = stdout.trim();
     return value ? value : null;

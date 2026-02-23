@@ -441,6 +441,7 @@ function runTailscaleCommand(
   return new Promise((resolve) => {
     const proc = spawn("tailscale", args, {
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     let stdout = "";

@@ -25,6 +25,7 @@ export async function runZca(args: string[], options?: ZcaRunOptions): Promise<Z
       cwd: options?.cwd,
       env: { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     };
 
     const proc = spawn(ZCA_BINARY, fullArgs, spawnOpts);
@@ -84,6 +85,7 @@ export function runZcaInteractive(args: string[], options?: ZcaRunOptions): Prom
       cwd: options?.cwd,
       env: { ...process.env },
       stdio: "inherit",
+      windowsHide: true,
     };
 
     const proc = spawn(ZCA_BINARY, fullArgs, spawnOpts);
@@ -157,6 +159,7 @@ export function runZcaStreaming(
     cwd: options?.cwd,
     env: { ...process.env },
     stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
   };
 
   const proc = spawn(ZCA_BINARY, fullArgs, spawnOpts);

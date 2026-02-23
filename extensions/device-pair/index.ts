@@ -56,6 +56,7 @@ async function runFixedCommandWithTimeout(
     const proc = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
+      windowsHide: true,
     });
 
     let stdout = "";
