@@ -218,4 +218,55 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       delete raw.identity;
     },
   },
+  {
+    id: "gateway.auth.mode-approval->token",
+    describe: 'Migrate gateway.auth.mode "approval" to "token" and approval sub-object to rateLimit',
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const auth = getRecord(gateway.auth);
+      if (!auth) {
+        return;
+      }
+
+      // Migrate mode: "approval" → "token"
+      if (auth.mode === "approval") {
+        auth.mode = "token";
+        changes.push('Updated gateway.auth.mode "approval" → "token".');
+      }
+
+      // Migrate approval sub-object → rateLimit
+      const approval = getRecord(auth.approval);
+      if (approval) {
+        const rateLimit = getRecord(auth.rateLimit) ?? {};
+
+        // Map old approval fields to new rateLimit fields
+        if (rateLimit.maxAttempts === undefined && approval.maxAuthFailures !== undefined) {
+          rateLimit.maxAttempts = approval.maxAuthFailures;
+        }
+        if (rateLimit.windowMs === undefined && approval.windowMs !== undefined) {
+          rateLimit.windowMs = approval.windowMs;
+        }
+        if (rateLimit.lockoutMs === undefined) {
+          const lockout = approval.rateLimitCooldownMs ?? approval.cooldownMs;
+          if (lockout !== undefined) {
+            rateLimit.lockoutMs = lockout;
+          }
+        }
+
+        // Migrate approval.password → auth.password if not already set
+        if (auth.password === undefined && typeof approval.password === "string") {
+          auth.password = approval.password;
+        }
+
+        if (Object.keys(rateLimit).length > 0) {
+          auth.rateLimit = rateLimit;
+        }
+        delete auth.approval;
+        changes.push("Moved gateway.auth.approval → gateway.auth.rateLimit.");
+      }
+    },
+  },
 ];

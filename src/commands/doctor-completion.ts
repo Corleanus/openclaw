@@ -32,6 +32,7 @@ async function generateCompletionCache(): Promise<boolean> {
     cwd: root,
     env: process.env,
     encoding: "utf-8",
+    windowsHide: true,
   });
 
   return result.status === 0;

@@ -133,4 +133,20 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["gateway", "token"],
     message: "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
   },
+  {
+    path: ["gateway", "auth", "mode"],
+    message:
+      'gateway.auth.mode "approval" was replaced by "token"; use gateway.auth.mode "token" instead (auto-migrated on load).',
+    match: (value) => value === "approval",
+  },
+  {
+    path: ["gateway", "auth", "approval"],
+    message:
+      "gateway.auth.approval was replaced by gateway.auth.rateLimit (auto-migrated on load).",
+  },
+  {
+    path: ["channels", "whatsapp", "enabled"],
+    message:
+      "channels.whatsapp.enabled was removed; enablement is now per-account via channels.whatsapp.accounts.<id>.enabled (auto-migrated on load).",
+  },
 ];

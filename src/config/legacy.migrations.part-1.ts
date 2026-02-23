@@ -357,6 +357,29 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "channels.whatsapp.enabled->removed",
+    describe: "Remove channels.whatsapp.enabled (enablement is now per-account only)",
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      if (!channels) {
+        return;
+      }
+      const whatsapp = getRecord(channels.whatsapp);
+      if (!whatsapp) {
+        return;
+      }
+      if (whatsapp.enabled === undefined) {
+        return;
+      }
+      delete whatsapp.enabled;
+      channels.whatsapp = whatsapp;
+      raw.channels = channels;
+      changes.push(
+        "Removed channels.whatsapp.enabled (enablement is now per-account via channels.whatsapp.accounts.<id>.enabled).",
+      );
+    },
+  },
+  {
     id: "routing.groupChat.requireMention->groups.*.requireMention",
     describe: "Move routing.groupChat.requireMention to channels.whatsapp/telegram/imessage groups",
     apply: (raw, changes) => {

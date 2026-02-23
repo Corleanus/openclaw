@@ -35,15 +35,11 @@ export type VoiceMessageMetadata = {
  */
 export async function getAudioDuration(filePath: string): Promise<number> {
   try {
-    const { stdout } = await execFileAsync("ffprobe", [
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "csv=p=0",
-      filePath,
-    ]);
+    const { stdout } = await execFileAsync(
+      "ffprobe",
+      ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", filePath],
+      { windowsHide: true },
+    );
     const duration = parseFloat(stdout.trim());
     if (isNaN(duration)) {
       throw new Error("Could not parse duration");
@@ -78,20 +74,11 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
 
   try {
     // Convert to raw 16-bit signed PCM, mono, 8kHz
-    await execFileAsync("ffmpeg", [
-      "-y",
-      "-i",
-      filePath,
-      "-f",
-      "s16le",
-      "-acodec",
-      "pcm_s16le",
-      "-ac",
-      "1",
-      "-ar",
-      "8000",
-      tempPcm,
-    ]);
+    await execFileAsync(
+      "ffmpeg",
+      ["-y", "-i", filePath, "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "8000", tempPcm],
+      { windowsHide: true },
+    );
 
     const pcmData = await fs.readFile(tempPcm);
     const samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
@@ -162,17 +149,11 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   if (ext === ".ogg") {
     // Verify it's Opus codec, not Vorbis (Vorbis won't play on mobile)
     try {
-      const { stdout } = await execFileAsync("ffprobe", [
-        "-v",
-        "error",
-        "-select_streams",
-        "a:0",
-        "-show_entries",
-        "stream=codec_name",
-        "-of",
-        "csv=p=0",
-        filePath,
-      ]);
+      const { stdout } = await execFileAsync(
+        "ffprobe",
+        ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", filePath],
+        { windowsHide: true },
+      );
       if (stdout.trim().toLowerCase() === "opus") {
         return { path: filePath, cleanup: false };
       }
@@ -185,16 +166,9 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   const tempDir = resolvePreferredOpenClawTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
-  await execFileAsync("ffmpeg", [
-    "-y",
-    "-i",
-    filePath,
-    "-c:a",
-    "libopus",
-    "-b:a",
-    "64k",
-    outputPath,
-  ]);
+  await execFileAsync("ffmpeg", ["-y", "-i", filePath, "-c:a", "libopus", "-b:a", "64k", outputPath], {
+    windowsHide: true,
+  });
 
   return { path: outputPath, cleanup: true };
 }

@@ -401,6 +401,9 @@ function shouldSkipPreferredPluginAutoEnable(
   return false;
 }
 
+/** Channels whose schema does not support `enabled` at root level (only per-account). */
+const CHANNELS_WITHOUT_ROOT_ENABLED = new Set(["whatsapp"]);
+
 function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   if (builtInChannelId) {
@@ -410,14 +413,14 @@ function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawCon
       existing && typeof existing === "object" && !Array.isArray(existing)
         ? (existing as Record<string, unknown>)
         : {};
+    const merged = CHANNELS_WITHOUT_ROOT_ENABLED.has(builtInChannelId)
+      ? { ...existingRecord }
+      : { ...existingRecord, enabled: true };
     return {
       ...cfg,
       channels: {
         ...cfg.channels,
-        [builtInChannelId]: {
-          ...existingRecord,
-          enabled: true,
-        },
+        [builtInChannelId]: merged,
       },
     };
   }
@@ -488,6 +491,9 @@ export function applyPluginAutoEnable(params: {
               Array.isArray(channelConfig)
             ) {
               return false;
+            }
+            if (CHANNELS_WITHOUT_ROOT_ENABLED.has(builtInChannelId)) {
+              return Object.keys(channelConfig).length > 0;
             }
             return (channelConfig as { enabled?: unknown }).enabled === true;
           })()

@@ -41,22 +41,26 @@ async function generateSelfSignedCert(params: {
   if (keyDir !== certDir) {
     await ensureDir(keyDir);
   }
-  await execFileAsync("openssl", [
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-sha256",
-    "-days",
-    "3650",
-    "-nodes",
-    "-keyout",
-    params.keyPath,
-    "-out",
-    params.certPath,
-    "-subj",
-    "/CN=openclaw-gateway",
-  ]);
+  await execFileAsync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-sha256",
+      "-days",
+      "3650",
+      "-nodes",
+      "-keyout",
+      params.keyPath,
+      "-out",
+      params.certPath,
+      "-subj",
+      "/CN=openclaw-gateway",
+    ],
+    { windowsHide: true },
+  );
   await fs.chmod(params.keyPath, 0o600).catch(() => {});
   await fs.chmod(params.certPath, 0o600).catch(() => {});
   params.log?.info?.(

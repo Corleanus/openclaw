@@ -112,6 +112,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         shell: true,
         cwd: getCwd(),
         env,
+        windowsHide: true,
       });
 
       let stdout = "";

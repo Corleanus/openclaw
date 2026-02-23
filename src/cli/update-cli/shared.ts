@@ -265,6 +265,7 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
     cwd: root,
     env: process.env,
     encoding: "utf-8",
+    windowsHide: true,
   });
 
   if (result.error) {
