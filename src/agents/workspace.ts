@@ -29,6 +29,9 @@ export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
+export const DEFAULT_SESSION_STATE_FILENAME = "SESSION-STATE.md";
+export const DEFAULT_PREFLIGHT_FILENAME = "PREFLIGHT.md";
+export const DEFAULT_SKILL_ROUTER_FILENAME = "skill-router.md";
 const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
@@ -116,7 +119,10 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME
-  | typeof DEFAULT_MEMORY_ALT_FILENAME;
+  | typeof DEFAULT_MEMORY_ALT_FILENAME
+  | typeof DEFAULT_SESSION_STATE_FILENAME
+  | typeof DEFAULT_PREFLIGHT_FILENAME
+  | typeof DEFAULT_SKILL_ROUTER_FILENAME;
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -142,6 +148,9 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
+  DEFAULT_SESSION_STATE_FILENAME,
+  DEFAULT_PREFLIGHT_FILENAME,
+  DEFAULT_SKILL_ROUTER_FILENAME,
 ]);
 
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
@@ -444,6 +453,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   const entries: Array<{
     name: WorkspaceBootstrapFileName;
     filePath: string;
+    optional?: boolean;
   }> = [
     {
       name: DEFAULT_AGENTS_FILENAME,
@@ -473,6 +483,21 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       name: DEFAULT_BOOTSTRAP_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
     },
+    {
+      name: DEFAULT_SESSION_STATE_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_SESSION_STATE_FILENAME),
+      optional: true,
+    },
+    {
+      name: DEFAULT_PREFLIGHT_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_PREFLIGHT_FILENAME),
+      optional: true,
+    },
+    {
+      name: DEFAULT_SKILL_ROUTER_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_SKILL_ROUTER_FILENAME),
+      optional: true,
+    },
   ];
 
   entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
@@ -488,7 +513,9 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         missing: false,
       });
     } catch {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
+      if (!entry.optional) {
+        result.push({ name: entry.name, path: entry.filePath, missing: true });
+      }
     }
   }
   return result;

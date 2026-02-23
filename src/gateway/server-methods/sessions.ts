@@ -426,10 +426,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "delete", client, isWebchatConnect, respond })) {
-      return;
-    }
-
     const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
     const mainKey = resolveMainSessionKey(cfg);
     if (target.canonicalKey === mainKey) {
