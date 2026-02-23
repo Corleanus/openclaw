@@ -7,10 +7,10 @@
 
 import type { ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
-import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
+import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
 export type TwitchRuntimeEnv = {
@@ -58,16 +58,6 @@ async function processTwitchMessage(params: {
     },
   });
 
-  // Apply dormancy gate
-  const dormancyResult = core.channel.routing.applyDormancyGate({
-    agentId: route.agentId,
-    messageTimestamp: message.timestamp?.getTime(),
-  });
-  if (!dormancyResult.shouldProcess) {
-    runtime.log?.(`Skipping message: agent ${route.agentId} dormancy gate (${dormancyResult.reason})`);
-    return;
-  }
-
   const rawBody = message.message;
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "Twitch",
@@ -79,6 +69,7 @@ async function processTwitchMessage(params: {
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     From: `twitch:user:${message.userId}`,

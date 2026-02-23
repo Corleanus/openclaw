@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 export type TimeFormatPreference = "auto" | "12" | "24";
 export type ResolvedTimeFormat = "12" | "24";
@@ -96,9 +96,10 @@ export function withNormalizedTimestamp<T extends Record<string, unknown>>(
 function detectSystemTimeFormat(): boolean {
   if (process.platform === "darwin") {
     try {
-      const result = execSync("defaults read -g AppleICUForce24HourTime 2>/dev/null", {
+      const result = execFileSync("defaults", ["read", "-g", "AppleICUForce24HourTime"], {
         encoding: "utf8",
         timeout: 500,
+        stdio: ["pipe", "pipe", "pipe"],
       }).trim();
       if (result === "1") {
         return true;
@@ -108,6 +109,24 @@ function detectSystemTimeFormat(): boolean {
       }
     } catch {
       // Not set, fall through
+    }
+  }
+
+  if (process.platform === "win32") {
+    try {
+      const result = execFileSync(
+        "powershell",
+        ["-Command", "(Get-Culture).DateTimeFormat.ShortTimePattern"],
+        { encoding: "utf8", timeout: 1000 },
+      ).trim();
+      if (result.startsWith("H")) {
+        return true;
+      }
+      if (result.startsWith("h")) {
+        return false;
+      }
+    } catch {
+      // Fall through
     }
   }
 

@@ -48,7 +48,6 @@ The shell tool uses a fresh TTY per command. To avoid re-prompts and failures, a
 Example (see `tmux` skill for socket conventions, do not reuse old session names):
 
 ```bash
-# Use OPENCLAW_TMUX_SOCKET_DIR (legacy CLAWDBOT_TMUX_SOCKET_DIR also supported).
 SOCKET_DIR="${OPENCLAW_TMUX_SOCKET_DIR:-${CLAWDBOT_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}}"
 mkdir -p "$SOCKET_DIR"
 SOCKET="$SOCKET_DIR/openclaw-op.sock"

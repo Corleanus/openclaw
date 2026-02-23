@@ -13,7 +13,7 @@ metadata:
             {
               "id": "brew-cask",
               "kind": "brew",
-              "cask": "steipete/tap/codexbar",
+              "formula": "steipete/tap/codexbar",
               "bins": ["codexbar"],
               "label": "Install CodexBar (brew cask)",
             },
@@ -28,7 +28,7 @@ metadata:
 
 Get per-model usage cost from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
 
-Platform note: CodexBar CLI is currently macOS-only. This skill requires `codexbar` on the local machine.
+TODO: add Linux CLI support guidance once CodexBar CLI install path is documented for Linux.
 
 ## Quick start
 

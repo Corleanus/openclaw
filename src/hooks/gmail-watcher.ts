@@ -6,8 +6,8 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import type { OpenClawConfig } from "../config/config.js";
 import { hasBinary } from "../agents/skills.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
@@ -71,7 +71,6 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const child = spawn("gog", args, {
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
-    ...(process.platform === "win32" ? { windowsHide: true } : {}),
   });
 
   child.stdout?.on("data", (data: Buffer) => {

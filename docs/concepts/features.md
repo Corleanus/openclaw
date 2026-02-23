@@ -9,7 +9,7 @@ title: "Features"
 
 <Columns>
   <Card title="Channels" icon="message-square">
-    WhatsApp, Telegram, Discord, iMessage, Slack, Signal, WebChat, Matrix, and Microsoft Teams with a single Gateway.
+    WhatsApp, Telegram, Discord, and iMessage with a single Gateway.
   </Card>
   <Card title="Plugins" icon="plug">
     Add Mattermost and more with extensions.
@@ -35,11 +35,6 @@ title: "Features"
 - Discord bot support (channels.discord.js)
 - Mattermost bot support (plugin)
 - iMessage integration via local imsg CLI (macOS)
-- Slack bot support
-- Signal bot support
-- WebChat support
-- Matrix bot support
-- Microsoft Teams bot support
 - Agent bridge for Pi in RPC mode with tool streaming
 - Streaming and chunking for long responses
 - Multi-agent routing for isolated sessions per workspace or sender

@@ -14,7 +14,7 @@ Provided by the active memory plugin (default: `memory-core`; set `plugins.slots
 Related:
 
 - Memory concept: [Memory](/concepts/memory)
-- Plugins: [Plugins](/plugins)
+- Plugins: [Plugins](/tools/plugin)
 
 ## Examples
 
@@ -36,16 +36,6 @@ Common:
 
 - `--agent <id>`: scope to a single agent (default: all configured agents).
 - `--verbose`: emit detailed logs during probes and indexing.
-
-`memory index`:
-
-- `--force`: force full reindex (ignores dirty check).
-
-`memory search`:
-
-- `--max-results <n>`: maximum number of results to return.
-- `--min-score <n>`: minimum similarity score threshold.
-- `--json`: output JSON.
 
 Notes:
 

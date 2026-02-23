@@ -23,16 +23,6 @@ openclaw doctor --repair
 openclaw doctor --deep
 ```
 
-Options:
-
-- `--no-workspace-suggestions`: disable workspace memory hints.
-- `--yes`: accept defaults without prompting (headless).
-- `--repair` (alias `--fix`): apply recommended repairs without prompting.
-- `--force`: apply aggressive repairs (overwrites custom service config).
-- `--non-interactive`: skip prompts; apply safe migrations only.
-- `--generate-gateway-token`: generate and configure a gateway token.
-- `--deep`: scan system services for extra gateway installs.
-
 Notes:
 
 - Interactive prompts (like keychain/OAuth fixes) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) will skip prompts.

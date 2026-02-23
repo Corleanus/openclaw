@@ -40,13 +40,3 @@ export function resolveGatewayStateDir(env: Record<string, string | undefined>):
   const suffix = resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE);
   return path.join(home, `.openclaw${suffix}`);
 }
-
-export function resolveGatewayLogDir(env: Record<string, string | undefined>): string {
-  const override = env.OPENCLAW_LOG_DIR?.trim();
-  if (override) {
-    const home = override.startsWith("~") ? resolveHomeDir(env) : undefined;
-    return resolveUserPathWithHome(override, home);
-  }
-  const stateDir = resolveGatewayStateDir(env);
-  return path.join(stateDir, "logs");
-}
