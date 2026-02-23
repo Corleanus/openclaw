@@ -92,6 +92,30 @@ describe("applyExclusiveSlotSelection", () => {
     expect(result.warnings).not.toContain('Disabled other "memory" slot plugins: memory-core.');
   });
 
+  it("does not disable supplementary plugins", () => {
+    const config = createMemoryConfig({
+      slots: { memory: "memory-core" },
+      entries: { "memory-core": { enabled: true } },
+    });
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: "memory",
+      selectedKind: "memory",
+      registry: {
+        plugins: [
+          { id: "memory-core", kind: "memory" },
+          { id: "memory", kind: "memory" },
+          { id: "mem0-supplementary", kind: "memory", supplementary: true },
+        ],
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
+    // Supplementary plugin should NOT be disabled
+    expect(result.config.plugins?.entries?.["mem0-supplementary"]?.enabled).not.toBe(false);
+  });
+
   it("skips changes when no exclusive slot applies", () => {
     const config: OpenClawConfig = {};
     const result = applyExclusiveSlotSelection({

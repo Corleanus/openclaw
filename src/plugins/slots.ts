@@ -7,6 +7,7 @@ export type PluginSlotKey = keyof PluginSlotsConfig;
 type SlotPluginRecord = {
   id: string;
   kind?: PluginKind;
+  supplementary?: boolean;
 };
 
 const SLOT_BY_KIND: Record<PluginKind, PluginSlotKey> = {
@@ -68,6 +69,9 @@ export function applyExclusiveSlotSelection(params: {
         continue;
       }
       if (plugin.kind !== params.selectedKind) {
+        continue;
+      }
+      if (plugin.supplementary) {
         continue;
       }
       const entry = entries[plugin.id];

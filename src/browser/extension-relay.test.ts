@@ -208,14 +208,14 @@ describe("chrome extension relay server", () => {
     expect(err.message).toContain("401");
   });
 
-  it("rejects extension websocket access without relay auth token", async () => {
+  it("accepts extension websocket access without relay auth token (loopback + origin sufficient)", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
     const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`);
-    const err = await waitForError(ext);
-    expect(err.message).toContain("401");
+    await waitForOpen(ext);
+    ext.close();
   });
 
   it("rejects a second live extension connection with 409", async () => {

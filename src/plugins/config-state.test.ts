@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizePluginsConfig } from "./config-state.js";
+import { normalizePluginsConfig, resolveMemorySlotDecision } from "./config-state.js";
 
 describe("normalizePluginsConfig", () => {
   it("uses default memory slot when not specified", () => {
@@ -46,5 +46,28 @@ describe("normalizePluginsConfig", () => {
       slots: { memory: "   " },
     });
     expect(result.slots.memory).toBe("memory-core");
+  });
+});
+
+describe("resolveMemorySlotDecision", () => {
+  it("allows supplementary memory plugins regardless of slot", () => {
+    const result = resolveMemorySlotDecision({
+      id: "openclaw-mem0",
+      kind: "memory",
+      slot: "memory-core",
+      selectedId: "memory-core",
+      supplementary: true,
+    });
+    expect(result.enabled).toBe(true);
+  });
+
+  it("disables non-supplementary memory plugins when slot is set to another", () => {
+    const result = resolveMemorySlotDecision({
+      id: "other-memory",
+      kind: "memory",
+      slot: "memory-core",
+      selectedId: "memory-core",
+    });
+    expect(result.enabled).toBe(false);
   });
 });

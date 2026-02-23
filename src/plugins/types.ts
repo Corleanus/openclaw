@@ -233,6 +233,7 @@ export type OpenClawPluginDefinition = {
   description?: string;
   version?: string;
   kind?: PluginKind;
+  supplementary?: boolean;
   configSchema?: OpenClawPluginConfigSchema;
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;

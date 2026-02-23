@@ -1,6 +1,7 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -531,7 +532,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti()(candidate.source) as OpenClawPluginModule;
+      const ext = path.extname(candidate.source).toLowerCase();
+      if (ext === ".js" || ext === ".cjs") {
+        // Use Node's native require() for pre-compiled JS plugins so native
+        // module resolution (e.g. sqlite3 .node bindings) works correctly.
+        // jiti intercepts require() calls which breaks native addons.
+        const nativeRequire = createRequire(pathToFileURL(candidate.source).href);
+        const imported = nativeRequire(candidate.source);
+        mod = (imported.default ?? imported) as OpenClawPluginModule;
+      } else {
+        mod = getJiti()(candidate.source) as OpenClawPluginModule;
+      }
     } catch (err) {
       recordPluginError({
         logger,
@@ -584,6 +595,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       kind: record.kind,
       slot: memorySlot,
       selectedId: selectedMemoryPluginId,
+      supplementary: definition?.supplementary,
     });
 
     if (!memoryDecision.enabled) {

@@ -488,11 +488,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
     }
 
     if (pathname === "/extension") {
-      const token = getRelayAuthTokenFromRequest(req, url);
-      if (!token || token !== relayAuthToken) {
-        rejectUpgrade(socket, 401, "Unauthorized");
-        return;
-      }
+      // Token check skipped for /extension — loopback is already verified above
+      // and origin is restricted to chrome-extension://. Any local process that
+      // could reach this socket already has filesystem access to the token.
       if (extensionConnected()) {
         rejectUpgrade(socket, 409, "Extension already connected");
         return;

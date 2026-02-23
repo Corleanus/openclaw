@@ -199,8 +199,12 @@ export function resolveMemorySlotDecision(params: {
   kind?: string;
   slot: string | null | undefined;
   selectedId: string | null;
+  supplementary?: boolean;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
   if (params.kind !== "memory") {
+    return { enabled: true };
+  }
+  if (params.supplementary) {
     return { enabled: true };
   }
   if (params.slot === null) {
