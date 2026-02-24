@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -425,6 +424,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      // Use Node's native require/import for packages with native addons.
+      // jiti's module resolution breaks .node binary loading (e.g. sqlite3).
+      nativeModules: ["sqlite3", "better-sqlite3", "bindings", "node-gyp-build", "prebuild-install"],
       ...(pluginSdkAlias || pluginSdkAccountIdAlias
         ? {
             alias: {
@@ -532,17 +534,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      const ext = path.extname(candidate.source).toLowerCase();
-      if (ext === ".js" || ext === ".cjs") {
-        // Use Node's native require() for pre-compiled JS plugins so native
-        // module resolution (e.g. sqlite3 .node bindings) works correctly.
-        // jiti intercepts require() calls which breaks native addons.
-        const nativeRequire = createRequire(pathToFileURL(candidate.source).href);
-        const imported = nativeRequire(candidate.source);
-        mod = (imported.default ?? imported) as OpenClawPluginModule;
-      } else {
-        mod = getJiti()(candidate.source) as OpenClawPluginModule;
-      }
+      mod = getJiti()(candidate.source) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
