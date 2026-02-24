@@ -252,7 +252,7 @@ Plugins are discovered and loaded at runtime via src/plugins/*.
 
 - Bundled plugins live under extensions/* and are discovered via src/plugins/bundled-dir.ts.
 - Plugin discovery reads package.json "openclaw" metadata for extension entrypoints and requires openclaw.plugin.json for config schema.
-- Plugins are loaded with jiti to support TS/ESM without a separate build step (src/plugins/loader.ts).
+- Plugins are loaded with jiti to support TS/ESM without a separate build step (src/plugins/loader.ts). **Gotcha:** jiti's sync loader breaks packages with ESM-only transitive deps (e.g. cloudflare .mjs internals, @google/genai). For plugins with heavy/ESM dependency trees, pre-compile to `.cjs` with esbuild (all deps external) — the loader detects `.cjs` files and loads them via `createRequire` instead of jiti, so runtime `import()` calls use Node's native ESM resolver.
 - openclaw/plugin-sdk is aliased into the core source/dist so plugins can import shared types/utilities.
 - Discovery order defines precedence for duplicate ids: config > workspace > global > bundled (src/plugins/discovery.ts, src/plugins/loader.ts).
 - Bundled plugins are disabled by default unless explicitly enabled in config (except the selected memory-slot plugin) (src/plugins/config-state.ts).
