@@ -1,6 +1,7 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -426,12 +427,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
       // Use Node's native require/import for packages with native addons.
       // jiti's module resolution breaks .node binary loading (e.g. sqlite3).
-      // Delegate entire mem0ai dependency tree to Node's native loader.
-      // jiti breaks: native .node binaries (sqlite3), relative .mjs imports
-      // inside node_modules (cloudflare/internal/qs/index.mjs), and various
-      // ESM-only packages.  Listing mem0ai here ensures all its transitive
-      // deps also use native resolution.
-      nativeModules: ["mem0ai"],
+      nativeModules: ["sqlite3", "better-sqlite3"],
       ...(pluginSdkAlias || pluginSdkAccountIdAlias
         ? {
             alias: {
@@ -539,7 +535,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti()(candidate.source) as OpenClawPluginModule;
+      // Pre-compiled .cjs plugins: load with Node's native require() so that
+      // any dynamic import() calls inside (e.g. `await import("mem0ai")`) use
+      // Node's native ESM loader instead of jiti's sync resolver.  jiti breaks
+      // packages with native .node binaries and ESM-only transitive deps.
+      if (candidate.source.endsWith(".cjs")) {
+        const req = createRequire(pathToFileURL(candidate.source).href);
+        mod = req(candidate.source) as OpenClawPluginModule;
+      } else {
+        mod = getJiti()(candidate.source) as OpenClawPluginModule;
+      }
     } catch (err) {
       recordPluginError({
         logger,
