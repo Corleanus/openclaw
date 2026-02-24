@@ -426,7 +426,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
       // Use Node's native require/import for packages with native addons.
       // jiti's module resolution breaks .node binary loading (e.g. sqlite3).
-      nativeModules: ["sqlite3", "better-sqlite3", "bindings", "node-gyp-build", "prebuild-install"],
+      nativeModules: [
+        // Native addons — jiti can't resolve .node binaries
+        "sqlite3", "better-sqlite3", "bindings", "node-gyp-build", "prebuild-install",
+        // ESM-only packages — jiti can't resolve internal .mjs imports
+        "cloudflare", "openai", "@anthropic-ai/sdk",
+      ],
       ...(pluginSdkAlias || pluginSdkAccountIdAlias
         ? {
             alias: {
