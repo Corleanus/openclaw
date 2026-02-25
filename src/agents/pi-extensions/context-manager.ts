@@ -151,6 +151,18 @@ function buildKeyExchanges(
   return exchanges.slice(0, 8); // Cap at 8
 }
 
+function summarizeToolParams(input: Record<string, unknown> | undefined): string {
+  if (!input) return "";
+  const SAFE_KEYS = ["path", "file_path", "query", "command", "url", "pattern", "glob"];
+  for (const key of SAFE_KEYS) {
+    if (typeof input[key] === "string") {
+      const val = input[key] as string;
+      return `${key}=${val.length > 80 ? val.slice(0, 77) + "..." : val}`;
+    }
+  }
+  return Object.keys(input).slice(0, 3).join(", ");
+}
+
 function extractChannel(sessionKey: string): string | null {
   const colonIdx = sessionKey.indexOf(":");
   return colonIdx > 0 ? sessionKey.slice(0, colonIdx) : null;
@@ -236,7 +248,9 @@ export function buildCheckpointFromState(
       topic,
       status: "in_progress",
       interrupted: options?.isSplitTurn ?? false,
-      last_tool_call: null,
+      last_tool_call: runtime.lastToolCall
+        ? { name: runtime.lastToolCall.name, params_summary: runtime.lastToolCall.paramsSummary }
+        : null,
       next_action: "",
     },
     decisions: stateFiles.decisions.map((d, i) => ({
@@ -278,6 +292,11 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
         if (resumeContent) {
           enqueueSystemEvent(resumeContent, { sessionKey: runtime.sessionKey });
           log.info("Injected session-resume checkpoint");
+          runtime.feedbackCounters = {
+            checkpointInjected: true,
+            referencesDetected: 0,
+            sectionsReferenced: [],
+          };
         }
       } catch (err) {
         log.warn(`Session resume injection failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -444,6 +463,12 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
       log.warn(`Failed to append tool ${toolName} to state: ${err instanceof Error ? err.message : String(err)}`);
     });
 
+    // Track last tool call on runtime
+    runtime.lastToolCall = {
+      name: toolName,
+      paramsSummary: summarizeToolParams(event.input as Record<string, unknown> | undefined),
+    };
+
     // Capture file paths from read/write/edit tools
     const input = event.input as Record<string, unknown> | undefined;
     if (input) {
@@ -463,6 +488,27 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
             log.warn(`Failed to append file ${filePath} to state: ${err instanceof Error ? err.message : String(err)}`);
           },
         );
+      }
+    }
+  });
+
+  // message_end event: track assistant references to checkpoint data
+  api.on("message_end", (event, ctx: ExtensionContext) => {
+    const runtime = getContextManagerRuntime(ctx.sessionManager);
+    if (!runtime?.feedbackCounters?.checkpointInjected) return;
+
+    const text = extractText(event.message);
+    if (!text) return;
+
+    const checkpointTerms = ["checkpoint", "last session", "previously", "was working on", "continued from"];
+    const lowerText = text.toLowerCase();
+    for (const term of checkpointTerms) {
+      if (lowerText.includes(term)) {
+        runtime.feedbackCounters.referencesDetected++;
+        if (!runtime.feedbackCounters.sectionsReferenced.includes(term)) {
+          runtime.feedbackCounters.sectionsReferenced.push(term);
+        }
+        break;
       }
     }
   });

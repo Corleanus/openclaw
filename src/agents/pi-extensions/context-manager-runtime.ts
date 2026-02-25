@@ -4,6 +4,12 @@ export type ContextManagerRuntimeValue = {
   sessionKey: string;
   contextWindowTokens: number;
   stateDir: string;
+  lastToolCall?: { name: string; paramsSummary: string };
+  feedbackCounters?: {
+    checkpointInjected: boolean;
+    referencesDetected: number;
+    sectionsReferenced: string[];
+  };
 };
 
 const registry = createSessionManagerRuntimeRegistry<ContextManagerRuntimeValue>();

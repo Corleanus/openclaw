@@ -1,5 +1,6 @@
 import { readLatestCheckpoint } from "./context-checkpoint.js";
 import type { Checkpoint } from "./context-checkpoint.js";
+import { readCrossSessionLearnings, type CrossSessionLearningsStore } from "./context-learnings.js";
 
 export type InjectReason = "post-compaction" | "session-resume";
 
@@ -25,6 +26,7 @@ function formatTime(isoString: string): string {
 export function renderCheckpointForInjection(
   checkpoint: Checkpoint,
   reason: InjectReason,
+  crossSessionLearnings?: CrossSessionLearningsStore,
 ): string {
   const parts: string[] = [];
   const { meta, working, decisions, thread, open_items, learnings } = checkpoint;
@@ -81,6 +83,17 @@ export function renderCheckpointForInjection(
     parts.push("Learnings (consider storing to long-term memory):");
     for (const l of learnings) {
       parts.push(`- ${l}`);
+    }
+  }
+
+  // Cross-session learnings
+  if (crossSessionLearnings && crossSessionLearnings.learnings.length > 0) {
+    const top10 = [...crossSessionLearnings.learnings]
+      .sort((a, b) => b.promotion_count - a.promotion_count)
+      .slice(0, 10);
+    parts.push("\n## Cross-Session Learnings (validated across sessions)");
+    for (const l of top10) {
+      parts.push(`- ${l.text} (confirmed ${l.promotion_count}x)`);
     }
   }
 
@@ -143,5 +156,6 @@ export async function readCheckpointForInjection(
   if (!checkpoint) {
     return null;
   }
-  return renderCheckpointForInjection(checkpoint, reason);
+  const crossLearnings = await readCrossSessionLearnings(stateDir, sessionKey);
+  return renderCheckpointForInjection(checkpoint, reason, crossLearnings);
 }

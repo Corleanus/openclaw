@@ -16,8 +16,10 @@ import {
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
-import { writeCheckpoint, pruneOldCheckpoints, readLatestCheckpoint } from "../context-checkpoint.js";
+import { writeCheckpoint, pruneOldCheckpoints, readLatestCheckpoint, atomicWriteFile } from "../context-checkpoint.js";
+import { enrichCheckpoint } from "../context-enrichment.js";
 import { calculateUtilization } from "../context-gauge.js";
+import { promoteLearningsToCrossSession } from "../context-learnings.js";
 import { readStateFiles, resetStateFiles } from "../context-state.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCheckpointFromState } from "./context-manager.js";
@@ -204,6 +206,50 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
+    // --- Context Manager: write checkpoint (mechanical, no LLM needed) ---
+    let cmRuntime: ReturnType<typeof getContextManagerRuntime> = null;
+    let stateFiles: Awaited<ReturnType<typeof readStateFiles>> | undefined;
+    let cpMessages: AgentMessage[] | undefined;
+    let checkpoint: Awaited<ReturnType<typeof buildCheckpointFromState>> | undefined;
+    let cpResult: Awaited<ReturnType<typeof writeCheckpoint>> | undefined;
+    let latestCp: Awaited<ReturnType<typeof readLatestCheckpoint>> | undefined;
+    try {
+      cmRuntime = getContextManagerRuntime(ctx.sessionManager);
+      if (cmRuntime) {
+        stateFiles = await readStateFiles(cmRuntime.stateDir, cmRuntime.sessionKey);
+        const usage = ctx.getContextUsage();
+        const gauge = calculateUtilization(usage, cmRuntime.contextWindowTokens);
+        // Combine both arrays: messagesToSummarize has early history,
+        // turnPrefixMessages has the current turn's prefix (on split turns).
+        // Both contain user/assistant messages needed for topic/thread extraction.
+        cpMessages = [
+          ...(preparation.messagesToSummarize ?? []),
+          ...(preparation.turnPrefixMessages ?? []),
+        ];
+        latestCp = await readLatestCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey);
+        const prevCount = latestCp?.meta?.compaction_count ?? 0;
+        checkpoint = buildCheckpointFromState(
+          stateFiles,
+          gauge,
+          cpMessages,
+          cmRuntime,
+          "compaction",
+          { isSplitTurn: preparation.isSplitTurn, fileOps: preparation.fileOps, compactionCount: prevCount + 1 },
+        );
+        cpResult = await writeCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey, checkpoint);
+        if (cpResult.written) {
+          await pruneOldCheckpoints(cmRuntime.stateDir, cmRuntime.sessionKey);
+        }
+      }
+    } catch (cpError) {
+      log.warn(
+        `Context checkpoint write failed during compaction: ${
+          cpError instanceof Error ? cpError.message : String(cpError)
+        }`,
+      );
+    }
+    // --- End Context Manager checkpoint ---
+
     const model = ctx.model;
     if (!model) {
       return {
@@ -229,44 +275,64 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
 
     try {
-      // --- Context Manager: write checkpoint before LLM summarization ---
-      try {
-        const cmRuntime = getContextManagerRuntime(ctx.sessionManager);
-        if (cmRuntime) {
-          const stateFiles = await readStateFiles(cmRuntime.stateDir, cmRuntime.sessionKey);
-          const usage = ctx.getContextUsage();
-          const gauge = calculateUtilization(usage, cmRuntime.contextWindowTokens);
-          // Combine both arrays: messagesToSummarize has early history,
-          // turnPrefixMessages has the current turn's prefix (on split turns).
-          // Both contain user/assistant messages needed for topic/thread extraction.
-          const messages = [
-            ...(preparation.messagesToSummarize ?? []),
-            ...(preparation.turnPrefixMessages ?? []),
-          ];
-          const latestCp = await readLatestCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey);
-          const prevCount = latestCp?.meta?.compaction_count ?? 0;
-          const checkpoint = buildCheckpointFromState(
-            stateFiles,
-            gauge,
-            messages,
-            cmRuntime,
-            "compaction",
-            { isSplitTurn: preparation.isSplitTurn, fileOps: preparation.fileOps, compactionCount: prevCount + 1 },
-          );
-          const result = await writeCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey, checkpoint);
-          if (result.written) {
-            await resetStateFiles(cmRuntime.stateDir, cmRuntime.sessionKey);
-            await pruneOldCheckpoints(cmRuntime.stateDir, cmRuntime.sessionKey);
+      // Enrichment: LLM-enhance the checkpoint if it was written
+      if (cpResult?.written && cmRuntime && checkpoint) {
+        try {
+          const enrichmentMessages = (cpMessages ?? []).map((m) => ({
+            role: "role" in m ? String(m.role) : "unknown",
+            content: "content" in m ? m.content : undefined,
+          }));
+          const enrichment = await enrichCheckpoint(checkpoint, enrichmentMessages, model, apiKey, signal);
+          if (enrichment) {
+            checkpoint.working.next_action = enrichment.next_action;
+            checkpoint.working.status = enrichment.task_status;
+            if (enrichment.decision_summaries.length > 0) {
+              const llmDecisions = enrichment.decision_summaries;
+              const heuristicDecisions = checkpoint.decisions.map(d => d.what);
+              const llmLower = new Set(llmDecisions.map(d => d.toLowerCase().trim()));
+              const preserved = heuristicDecisions.filter(d => !llmLower.has(d.toLowerCase().trim()));
+              const merged = [...llmDecisions, ...preserved];
+              checkpoint.decisions = merged.map((d, i) => ({
+                id: `d${i + 1}`, what: d, when: checkpoint!.meta.created_at,
+              }));
+            }
+            if (enrichment.open_items_refined.length > 0) {
+              const llmItems = enrichment.open_items_refined;
+              const llmItemsLower = new Set(llmItems.map(i => i.toLowerCase().trim()));
+              const preservedItems = checkpoint.open_items.filter(i => !llmItemsLower.has(i.toLowerCase().trim()));
+              checkpoint.open_items = [...llmItems, ...preservedItems];
+            }
+            checkpoint.meta.enrichment = "llm";
+            // Re-write YAML directly (bypass writeCheckpoint dedup)
+            const { stringify } = await import("yaml");
+            await atomicWriteFile(cpResult.path, stringify(checkpoint));
           }
+        } catch (enrichError) {
+          log.warn(`LLM enrichment failed, keeping heuristic checkpoint: ${enrichError instanceof Error ? enrichError.message : String(enrichError)}`);
         }
-      } catch (cpError) {
-        log.warn(
-          `Context checkpoint write failed during compaction: ${
-            cpError instanceof Error ? cpError.message : String(cpError)
-          }`,
-        );
       }
-      // --- End Context Manager checkpoint ---
+
+      // Learning promotion: persist cross-session learnings before state reset
+      if (stateFiles?.learnings && stateFiles.learnings.length > 0 && cmRuntime && checkpoint) {
+        const effectiveCheckpointId = cpResult?.written
+          ? checkpoint.meta.checkpoint_id
+          : (latestCp?.meta?.checkpoint_id ?? checkpoint.meta.checkpoint_id);
+        try {
+          await promoteLearningsToCrossSession(
+            cmRuntime.stateDir,
+            cmRuntime.sessionKey,
+            stateFiles.learnings,
+            effectiveCheckpointId,
+          );
+        } catch (promoError) {
+          log.warn(`Learning promotion failed: ${promoError instanceof Error ? promoError.message : String(promoError)}`);
+        }
+      }
+
+      // Reset state files after checkpoint + enrichment + promotion
+      if (cpResult?.written && cmRuntime) {
+        await resetStateFiles(cmRuntime.stateDir, cmRuntime.sessionKey);
+      }
 
       const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
       const modelContextWindow = resolveContextWindowTokens(model);

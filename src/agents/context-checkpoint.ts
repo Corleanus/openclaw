@@ -27,11 +27,12 @@ export interface CheckpointMeta {
   previous_checkpoint: string | null;
   channel: string | null;
   agent_id: string | null;
+  enrichment?: "llm" | "heuristic";
 }
 
 export interface CheckpointWorking {
   topic: string;
-  status: "in_progress" | "idle" | "waiting_for_user";
+  status: "in_progress" | "idle" | "waiting_for_user" | "completed" | "blocked" | "abandoned";
   interrupted: boolean;
   last_tool_call: { name: string; params_summary: string } | null;
   next_action: string;
@@ -62,7 +63,7 @@ export interface CheckpointThread {
 
 export interface Checkpoint {
   schema: "openclaw/checkpoint";
-  schema_version: 1 | 2;
+  schema_version: 1 | 2 | 3;
   meta: CheckpointMeta;
   working: CheckpointWorking;
   decisions: CheckpointDecision[];
@@ -118,7 +119,7 @@ async function readLatestPointer(dir: string): Promise<LatestPointer | null> {
   }
 }
 
-async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+export async function atomicWriteFile(filePath: string, content: string): Promise<void> {
   const dir = path.dirname(filePath);
   const tmp = path.join(dir, `${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
 
@@ -243,6 +244,10 @@ export async function readLatestCheckpoint(
         tools_used: Array.isArray(res.tools_used) ? (res.tools_used as string[]) : [],
       };
       checkpoint.schema_version = 2;
+    }
+    // Backward compat: default enrichment for pre-v3 checkpoints
+    if (!checkpoint.meta.enrichment) {
+      checkpoint.meta.enrichment = "heuristic";
     }
     return checkpoint;
   } catch {
