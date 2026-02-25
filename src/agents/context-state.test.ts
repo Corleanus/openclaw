@@ -7,9 +7,11 @@ import {
   appendLearningToState,
   appendOpenItemToState,
   initStateDir,
+  readLastToolCallFromState,
   readStateFiles,
   resetStateFiles,
   scoreFileAccess,
+  writeLastToolCallToState,
 } from "./context-state.js";
 import type { FileAccess } from "./context-state.js";
 
@@ -332,5 +334,20 @@ describe("readStateFiles + resetStateFiles", () => {
     expect(state.thread).toEqual([]);
     expect(state.resources.files).toEqual([]);
     expect(state.resources.tools_used).toEqual([]);
+  });
+
+  it("clears last_tool_call after resetStateFiles", async () => {
+    await writeLastToolCallToState(tmpDir, SESSION_KEY, {
+      name: "exec",
+      paramsSummary: "command=echo hello",
+    });
+
+    const beforeReset = await readLastToolCallFromState(tmpDir, SESSION_KEY);
+    expect(beforeReset).toEqual({ name: "exec", paramsSummary: "command=echo hello" });
+
+    await resetStateFiles(tmpDir, SESSION_KEY);
+
+    const afterReset = await readLastToolCallFromState(tmpDir, SESSION_KEY);
+    expect(afterReset).toBeNull();
   });
 });

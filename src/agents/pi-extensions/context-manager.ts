@@ -88,15 +88,38 @@ function buildThreadSummary(
   first: AgentMessage | undefined,
   last: AgentMessage | undefined,
 ): string {
-  const firstText = first ? truncate(extractText(first), 100) : "";
-  const lastText = last ? truncate(extractText(last), 100) : "";
-  if (firstText && lastText && first !== last) return `${firstText} ... ${lastText}`;
-  return firstText || lastText || "No conversation context";
+  const firstText = first ? truncate(extractText(first).trim(), 100) : "";
+  const lastText = last ? truncate(extractText(last).trim(), 100) : "";
+  if (firstText && lastText && first !== last) {
+    return `Session started with: ${firstText}. Latest user focus: ${lastText}.`;
+  }
+  if (lastText) {
+    return `Latest user focus: ${lastText}.`;
+  }
+  if (firstText) {
+    return `Session topic: ${firstText}.`;
+  }
+  return "No conversation context";
 }
 
 function buildKeyExchanges(
   messages: AgentMessage[],
 ): Array<{ role: "user" | "agent"; gist: string }> {
+  const toGist = (message: AgentMessage, role: "user" | "agent"): string => {
+    const text = truncate(extractText(message).trim(), 120);
+    if (text.length > 0) return text;
+    return role === "user" ? "[user message without text]" : "[assistant message without text]";
+  };
+
+  const pushExchange = (
+    target: Array<{ role: "user" | "agent"; gist: string }>,
+    role: "user" | "agent",
+    gist: string,
+  ): void => {
+    if (!gist.trim()) return;
+    target.push({ role, gist });
+  };
+
   const exchanges: Array<{ role: "user" | "agent"; gist: string }> = [];
   const userAgentPairs: Array<{ user: AgentMessage; agent?: AgentMessage }> = [];
 
@@ -121,9 +144,9 @@ function buildKeyExchanges(
 
   // Always include first
   const first = userAgentPairs[0];
-  exchanges.push({ role: "user", gist: truncate(extractText(first.user), 120) });
+  pushExchange(exchanges, "user", toGist(first.user, "user"));
   if (first.agent) {
-    exchanges.push({ role: "agent", gist: truncate(extractText(first.agent), 120) });
+    pushExchange(exchanges, "agent", toGist(first.agent, "agent"));
   }
 
   // Include decision points (short user reply after long agent response)
@@ -132,7 +155,7 @@ function buildKeyExchanges(
     if (prevAgent && extractText(prevAgent).length > 500) {
       const userText = extractText(userAgentPairs[i].user);
       if (userText.length < 50) {
-        exchanges.push({ role: "user", gist: truncate(userText, 120) });
+        pushExchange(exchanges, "user", truncate(userText.trim(), 120));
       }
     }
   }
@@ -141,9 +164,9 @@ function buildKeyExchanges(
   const lastPairs = userAgentPairs.slice(-2);
   for (const pair of lastPairs) {
     if (pair === first) continue; // Skip if already included
-    exchanges.push({ role: "user", gist: truncate(extractText(pair.user), 120) });
+    pushExchange(exchanges, "user", toGist(pair.user, "user"));
     if (pair.agent) {
-      exchanges.push({ role: "agent", gist: truncate(extractText(pair.agent), 120) });
+      pushExchange(exchanges, "agent", toGist(pair.agent, "agent"));
     }
   }
 
@@ -261,12 +284,16 @@ function isRealUserMessage(msg: AgentMessage): boolean {
   const role = (msg as { role?: string })?.role;
   if (role !== "user") return false;
   const text = extractText(msg);
+  const trimmed = text.trimStart();
   if (text.includes("<checkpoint-data")) return false;
   if (text.includes("schema: openclaw/checkpoint")) return false;
-  if (text.startsWith("Summary unavailable") || text.startsWith("This summary covers")) return false;
-  if (text.startsWith("Token utilization:") || text.startsWith("## Token Gauge")) return false;
+  if (trimmed.startsWith("Summary unavailable") || trimmed.startsWith("This summary covers")) return false;
+  if (trimmed.startsWith("Token utilization:") || trimmed.startsWith("## Token Gauge")) return false;
   // System-injected lines (e.g., from hooks or extensions)
-  if (text.startsWith("System:")) return false;
+  if (trimmed.startsWith("System:")) return false;
+  // Cron/injected payloads can be embedded in user-role content, often with timestamp prefixes.
+  // Prefix semantics: optional [bracketed] groups then [System Message] word boundary.
+  if (/^\s*(?:\[[^\]]+\]\s*)*\[System Message\](?=\s|$)/i.test(trimmed)) return false;
   return true;
 }
 
@@ -573,8 +600,8 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
       paramsSummary: summarizeToolParams(event.input as Record<string, unknown> | undefined),
     };
 
-    // Persist to state files so checkpoint builder can read it reliably
-    void writeLastToolCallToState(runtime.stateDir, runtime.sessionKey, runtime.lastToolCall).catch(e =>
+    // Persist before continuing so compaction cannot observe a stale/null file.
+    await writeLastToolCallToState(runtime.stateDir, runtime.sessionKey, runtime.lastToolCall).catch((e) =>
       log.warn?.(`Failed to persist lastToolCall: ${e instanceof Error ? e.message : String(e)}`)
     );
 

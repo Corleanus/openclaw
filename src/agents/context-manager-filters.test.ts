@@ -60,6 +60,15 @@ describe("isRealUserMessage", () => {
     expect(isRealUserMessage(msg as any)).toBe(false);
   });
 
+  it("rejects system-message payload embedded in user role", () => {
+    const msg = {
+      role: "user",
+      content:
+        '[Wed 2026-02-25 17:00 GMT+1] [System Message] [sessionId: abc] A cron job "Nasledstvo - Schedule Scanner"...',
+    };
+    expect(isRealUserMessage(msg as any)).toBe(false);
+  });
+
   it("rejects assistant messages", () => {
     const msg = { role: "assistant", content: "Here's the answer" };
     expect(isRealUserMessage(msg as any)).toBe(false);

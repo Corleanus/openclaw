@@ -45,9 +45,19 @@ export function extractKeywords(text: string): Set<string> {
   const normalized = normalize(text);
   const words = normalized.split(" ");
   const keywords = new Set<string>();
+
+  const stem = (word: string): string => {
+    // Lightweight stemming improves overlap for singular/plural variants.
+    if (word.endsWith("ies") && word.length > 4) return `${word.slice(0, -3)}y`;
+    if (word.endsWith("es") && word.length > 4) return word.slice(0, -2);
+    if (word.endsWith("s") && word.length > 4) return word.slice(0, -1);
+    return word;
+  };
+
   for (const w of words) {
-    if (w.length >= 3 && !STOP_WORDS.has(w)) {
-      keywords.add(w);
+    const cleaned = w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (cleaned.length >= 3 && !STOP_WORDS.has(cleaned)) {
+      keywords.add(stem(cleaned));
     }
   }
   return keywords;
@@ -79,7 +89,9 @@ export function isSemanticDuplicate(a: string, b: string): boolean {
     for (const w of kwA) {
       if (kwB.has(w)) intersectionSize++;
     }
-    if (intersectionSize / union.size >= 0.5) return true;
+    const minKeywordCount = Math.min(kwA.size, kwB.size);
+    const threshold = minKeywordCount >= 6 ? 0.4 : 0.5;
+    if (intersectionSize / union.size >= threshold) return true;
   }
 
   // Tier 3: substring containment (word-boundary aware to avoid "Decision 1" ⊂ "Decision 10")
@@ -88,9 +100,10 @@ export function isSemanticDuplicate(a: string, b: string): boolean {
 
   if (shorter.length >= 10 && longer.includes(shorter)) {
     const idx = longer.indexOf(shorter);
+    const beforeStart = idx === 0 || /\W/.test(longer[idx - 1]);
     const afterEnd = idx + shorter.length;
-    // Require word boundary at end of match (end-of-string or non-alphanumeric)
-    if (afterEnd >= longer.length || /\W/.test(longer[afterEnd])) return true;
+    const afterBoundary = afterEnd >= longer.length || /\W/.test(longer[afterEnd]);
+    if (beforeStart && afterBoundary) return true;
   }
 
   return false;

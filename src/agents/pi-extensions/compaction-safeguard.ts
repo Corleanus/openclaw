@@ -35,6 +35,9 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
+const MAX_TOPIC_CHARS = 200;
+const MAX_THREAD_SUMMARY_CHARS = 600;
+const MAX_GIST_CHARS = 200;
 
 type ToolFailure = {
   toolCallId: string;
@@ -51,6 +54,11 @@ function truncateFailureText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
+  return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
   return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
@@ -229,12 +237,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         ];
         latestCp = await readLatestCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey);
         const prevCount = latestCp?.meta?.compaction_count ?? 0;
-        // Hydrate lastToolCall from state files only when runtime has no value (avoids stale file overriding fresh runtime)
+        // Always read state file — runtime may be empty if tool_result hasn't fired yet
+        const persistedToolCall = await readLastToolCallFromState(cmRuntime.stateDir, cmRuntime.sessionKey);
+        if (!cmRuntime.lastToolCall && persistedToolCall) {
+          cmRuntime.lastToolCall = persistedToolCall;
+        }
         if (!cmRuntime.lastToolCall) {
-          const persistedToolCall = await readLastToolCallFromState(cmRuntime.stateDir, cmRuntime.sessionKey);
-          if (persistedToolCall) {
-            cmRuntime.lastToolCall = persistedToolCall;
-          }
+          log.debug("lastToolCall is null at compaction — no tool_result events captured this session segment");
         }
         checkpoint = buildCheckpointFromState(
           stateFiles,
@@ -292,8 +301,34 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           }));
           const enrichment = await enrichCheckpoint(checkpoint, enrichmentMessages, model, apiKey, signal);
           if (enrichment) {
-            checkpoint.working.next_action = enrichment.next_action;
-            checkpoint.working.status = enrichment.task_status;
+            // Apply each field independently — partial enrichment is better than none
+            let fieldsApplied = 0;
+            if (enrichment.topic_refined) {
+              checkpoint.working.topic = truncateText(enrichment.topic_refined, MAX_TOPIC_CHARS);
+              fieldsApplied++;
+            }
+            if (enrichment.next_action) {
+              checkpoint.working.next_action = enrichment.next_action;
+              fieldsApplied++;
+            }
+            if (enrichment.task_status) {
+              checkpoint.working.status = enrichment.task_status;
+              fieldsApplied++;
+            }
+            if (enrichment.thread_summary_refined) {
+              checkpoint.thread.summary = truncateText(
+                enrichment.thread_summary_refined,
+                MAX_THREAD_SUMMARY_CHARS,
+              );
+              fieldsApplied++;
+            }
+            if (enrichment.key_exchanges_refined.length > 0) {
+              checkpoint.thread.key_exchanges = enrichment.key_exchanges_refined
+                .map((x) => ({ role: x.role, gist: truncateText(x.gist, MAX_GIST_CHARS) }))
+                .filter((x) => x.gist.trim().length > 0)
+                .slice(0, 8);
+              fieldsApplied++;
+            }
             if (enrichment.decision_summaries.length > 0) {
               const llmDecisions = enrichment.decision_summaries;
               const heuristicDecisions = checkpoint.decisions.map(d => d.what);
@@ -301,9 +336,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 !llmDecisions.some(ld => isSemanticDuplicate(hd, ld))
               );
               const merged = [...llmDecisions, ...preserved];
-              checkpoint.decisions = merged.map((d, i) => ({
+              // Dedup within final decisions list — LLM may produce internal near-duplicates
+              const dedupedDecisions: string[] = [];
+              for (const d of merged) {
+                if (!dedupedDecisions.some(existing => isSemanticDuplicate(existing, d))) {
+                  dedupedDecisions.push(d);
+                }
+              }
+              checkpoint.decisions = dedupedDecisions.map((d, i) => ({
                 id: `d${i + 1}`, what: d, when: checkpoint!.meta.created_at,
               }));
+              fieldsApplied++;
             }
             if (enrichment.open_items_refined.length > 0) {
               const llmItems = enrichment.open_items_refined;
@@ -311,8 +354,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 !llmItems.some(li => isSemanticDuplicate(hi, li))
               );
               checkpoint.open_items = [...llmItems, ...preservedItems];
+              fieldsApplied++;
             }
-            checkpoint.meta.enrichment = "llm";
+            // Dedup within final open_items list — LLM may produce internal near-duplicates
+            const dedupedItems: string[] = [];
+            for (const item of checkpoint.open_items) {
+              if (!dedupedItems.some(existing => isSemanticDuplicate(existing, item))) {
+                dedupedItems.push(item);
+              }
+            }
+            checkpoint.open_items = dedupedItems;
+            // Only mark as LLM-enriched if at least one field was actually applied
+            if (fieldsApplied > 0) {
+              checkpoint.meta.enrichment = "llm";
+            }
             // Re-write YAML directly (bypass writeCheckpoint dedup)
             const { stringify } = await import("yaml");
             await atomicWriteFile(cpResult.path, stringify(checkpoint));

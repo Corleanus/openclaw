@@ -34,6 +34,10 @@ describe("isSemanticDuplicate", () => {
     expect(isSemanticDuplicate("fix", "fix the bug in parser")).toBe(false);
   });
 
+  it("does not merge numbered items with shared prefix", () => {
+    expect(isSemanticDuplicate("Decision 1", "Decision 10")).toBe(false);
+  });
+
   // Serbian stop words
   it("filters Serbian stop words in keyword extraction", () => {
     expect(isSemanticDuplicate("treba da se napravi checkpoint", "napravi checkpoint")).toBe(true);
@@ -46,6 +50,15 @@ describe("isSemanticDuplicate", () => {
       "Implement atomic write for checkpoint persistence",
       "Deploy gateway on different port for staging",
     )).toBe(false);
+  });
+
+  it("merges markdown/prose variants of the same open item", () => {
+    expect(
+      isSemanticDuplicate(
+        "Fix duplicate open items: 'Send Grigorije a plan' appears as both prose and bullet",
+        '- **Open items have duplicates**: "Send Grigorije a plan" appears as both prose and a bullet',
+      ),
+    ).toBe(true);
   });
 });
 
