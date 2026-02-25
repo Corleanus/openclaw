@@ -43,9 +43,15 @@ export interface CheckpointDecision {
   when: string; // ISO-8601
 }
 
+export interface CheckpointFileEntry {
+  path: string;
+  access_count: number;
+  kind: "read" | "modified";
+  score: number;
+}
+
 export interface CheckpointResources {
-  files_read: string[];
-  files_modified: string[];
+  files: CheckpointFileEntry[];
   tools_used: string[];
 }
 
@@ -56,7 +62,7 @@ export interface CheckpointThread {
 
 export interface Checkpoint {
   schema: "openclaw/checkpoint";
-  schema_version: 1;
+  schema_version: 1 | 2;
   meta: CheckpointMeta;
   working: CheckpointWorking;
   decisions: CheckpointDecision[];
@@ -219,7 +225,26 @@ export async function readLatestCheckpoint(
 
   try {
     const raw = await fs.promises.readFile(resolvedPath, "utf-8");
-    return parse(raw) as Checkpoint;
+    const checkpoint = parse(raw) as Checkpoint;
+    // Backward compat: normalize v1 resources (files_read/files_modified) to v2 (files)
+    const res = checkpoint.resources as unknown as Record<string, unknown>;
+    if (!Array.isArray(res.files)) {
+      const filesRead = Array.isArray(res.files_read) ? (res.files_read as string[]) : [];
+      const filesModified = Array.isArray(res.files_modified) ? (res.files_modified as string[]) : [];
+      const fileMap = new Map<string, CheckpointFileEntry>();
+      for (const p of filesRead) {
+        fileMap.set(p, { path: p, access_count: 1, kind: "read", score: 0 });
+      }
+      for (const p of filesModified) {
+        fileMap.set(p, { path: p, access_count: 1, kind: "modified", score: 0 });
+      }
+      checkpoint.resources = {
+        files: [...fileMap.values()],
+        tools_used: Array.isArray(res.tools_used) ? (res.tools_used as string[]) : [],
+      };
+      checkpoint.schema_version = 2;
+    }
+    return checkpoint;
   } catch {
     log.warn(`Failed to read checkpoint file: ${resolvedPath}`);
     return null;

@@ -157,26 +157,45 @@ export function buildCheckpointFromState(
   // Build key exchanges (subsample: first, decision points, last 2 pairs)
   const keyExchanges = buildKeyExchanges(messages);
 
-  // Merge file ops from compaction preparation if available
+  // Merge file ops from compaction preparation if available, with scoring
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const fileMap = new Map<string, { path: string; access_count: number; last_accessed: string; kind: "read" | "modified" }>();
+  for (const f of stateFiles.resources.files) {
+    fileMap.set(f.path, { path: f.path, access_count: f.access_count, last_accessed: f.last_accessed, kind: f.kind });
+  }
+  if (options?.fileOps) {
+    for (const p of options.fileOps.read) {
+      if (!fileMap.has(p)) {
+        fileMap.set(p, { path: p, access_count: 1, last_accessed: nowIso, kind: "read" });
+      }
+    }
+    for (const p of [...options.fileOps.edited, ...options.fileOps.written]) {
+      const existing = fileMap.get(p);
+      if (existing) {
+        existing.kind = "modified";
+      } else {
+        fileMap.set(p, { path: p, access_count: 1, last_accessed: nowIso, kind: "modified" });
+      }
+    }
+  }
+  const scoredFiles = [...fileMap.values()]
+    .map((f) => {
+      const ageMinutes = Math.max(0, (now.getTime() - new Date(f.last_accessed).getTime()) / 60000);
+      const recency = Math.exp(-0.003 * ageMinutes);
+      const kindBonus = f.kind === "modified" ? 1.5 : 1.0;
+      const score = Math.round(f.access_count * recency * kindBonus * 100) / 100;
+      return { path: f.path, access_count: f.access_count, kind: f.kind, score };
+    })
+    .sort((a, b) => b.score - a.score);
   const resources: CheckpointResources = {
-    files_read: [
-      ...new Set([
-        ...stateFiles.resources.files_read,
-        ...(options?.fileOps ? [...options.fileOps.read] : []),
-      ]),
-    ],
-    files_modified: [
-      ...new Set([
-        ...stateFiles.resources.files_modified,
-        ...(options?.fileOps ? [...options.fileOps.edited, ...options.fileOps.written] : []),
-      ]),
-    ],
+    files: scoredFiles,
     tools_used: [...stateFiles.resources.tools_used],
   };
 
   return {
     schema: "openclaw/checkpoint",
-    schema_version: 1,
+    schema_version: 2,
     meta: {
       checkpoint_id: "", // Set by writeCheckpoint
       session_key: runtime.sessionKey,

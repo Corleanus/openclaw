@@ -5,10 +5,17 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("context-state");
 
+export interface FileAccess {
+  path: string;
+  access_count: number;
+  last_accessed: string; // ISO-8601
+  kind: "read" | "modified"; // highest privilege seen (modified > read)
+}
+
 export interface StateFiles {
   decisions: Array<{ id: string; what: string; when: string }>;
   thread: Array<{ role: "user" | "agent"; gist: string }>;
-  resources: { files_read: string[]; files_modified: string[]; tools_used: string[] };
+  resources: { files: FileAccess[]; tools_used: string[] };
   open_items: string[];
 }
 
@@ -23,7 +30,40 @@ function resolveStateDir(stateDir: string, sessionKey: string): string {
 }
 
 function emptyResources(): StateFiles["resources"] {
-  return { files_read: [], files_modified: [], tools_used: [] };
+  return { files: [], tools_used: [] };
+}
+
+/** Normalize legacy resources format (files_read/files_modified) to new FileAccess format. */
+function normalizeResources(raw: Record<string, unknown>): StateFiles["resources"] {
+  if (Array.isArray((raw as { files?: unknown }).files)) {
+    return raw as StateFiles["resources"];
+  }
+  // Legacy format: { files_read: string[], files_modified: string[], tools_used: string[] }
+  const filesRead = Array.isArray(raw.files_read) ? (raw.files_read as string[]) : [];
+  const filesModified = Array.isArray(raw.files_modified) ? (raw.files_modified as string[]) : [];
+  const toolsUsed = Array.isArray(raw.tools_used) ? (raw.tools_used as string[]) : [];
+  const now = new Date().toISOString();
+  const fileMap = new Map<string, FileAccess>();
+  for (const p of filesRead) {
+    fileMap.set(p, { path: p, access_count: 1, last_accessed: now, kind: "read" });
+  }
+  for (const p of filesModified) {
+    const existing = fileMap.get(p);
+    if (existing) {
+      existing.kind = "modified";
+    } else {
+      fileMap.set(p, { path: p, access_count: 1, last_accessed: now, kind: "modified" });
+    }
+  }
+  return { files: [...fileMap.values()], tools_used: toolsUsed };
+}
+
+/** Score a file access entry for hot/cold ranking. */
+export function scoreFileAccess(file: FileAccess, now: Date = new Date()): number {
+  const ageMinutes = Math.max(0, (now.getTime() - new Date(file.last_accessed).getTime()) / 60000);
+  const recency = Math.exp(-0.003 * ageMinutes); // half-life ~3.8 hours
+  const kindBonus = file.kind === "modified" ? 1.5 : 1.0;
+  return file.access_count * recency * kindBonus;
 }
 
 function emptyState(): StateFiles {
@@ -104,15 +144,25 @@ export async function appendFileToState(
   const resourcesPath = path.join(dir, "resources.json");
 
   try {
-    const resources = await readJsonFile<StateFiles["resources"]>(resourcesPath, emptyResources());
-    const arr = kind === "read" ? resources.files_read : resources.files_modified;
-    if (arr.includes(filePath)) {
-      return;
+    const raw = await readJsonFile<Record<string, unknown>>(resourcesPath, {});
+    const resources = normalizeResources(raw);
+    const now = new Date().toISOString();
+    const existing = resources.files.find((f) => f.path === filePath);
+    if (existing) {
+      existing.access_count++;
+      existing.last_accessed = now;
+      if (kind === "modified" && existing.kind === "read") {
+        existing.kind = "modified";
+      }
+    } else {
+      if (resources.files.length >= MAX_FILES_PER_CATEGORY) {
+        // Evict lowest-scored entry
+        const nowDate = new Date();
+        resources.files.sort((a, b) => scoreFileAccess(b, nowDate) - scoreFileAccess(a, nowDate));
+        resources.files.pop();
+      }
+      resources.files.push({ path: filePath, access_count: 1, last_accessed: now, kind });
     }
-    if (arr.length >= MAX_FILES_PER_CATEGORY) {
-      return;
-    }
-    arr.push(filePath);
     await writeJsonFile(resourcesPath, resources);
   } catch (err) {
     log.warn("Failed to append file to state", { error: String(err) });
@@ -186,12 +236,13 @@ export async function appendOpenItemToState(
 export async function readStateFiles(stateDir: string, sessionKey: string): Promise<StateFiles> {
   const dir = resolveStateDir(stateDir, sessionKey);
 
-  const [decisions, thread, resources, open_items] = await Promise.all([
+  const [decisions, thread, rawResources, open_items] = await Promise.all([
     readJsonFile<StateFiles["decisions"]>(path.join(dir, "decisions.json"), []),
     readJsonFile<StateFiles["thread"]>(path.join(dir, "thread.json"), []),
-    readJsonFile<StateFiles["resources"]>(path.join(dir, "resources.json"), emptyResources()),
+    readJsonFile<Record<string, unknown>>(path.join(dir, "resources.json"), {}),
     readJsonFile<StateFiles["open_items"]>(path.join(dir, "open_items.json"), []),
   ]);
+  const resources = normalizeResources(rawResources);
 
   return { decisions, thread, resources, open_items };
 }

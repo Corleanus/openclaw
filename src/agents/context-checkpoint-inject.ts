@@ -84,6 +84,33 @@ export function renderCheckpointForInjection(
     }
   }
 
+  // Files (hot/cold scoring)
+  if (checkpoint.resources.files.length > 0) {
+    const sorted = [...checkpoint.resources.files].sort((a, b) => b.score - a.score);
+    const maxScore = sorted[0].score;
+    const threshold = maxScore > 0 ? 0.5 * maxScore : 0;
+    const hot = maxScore > 0 ? sorted.filter((f) => f.score > threshold) : sorted;
+    const cold = maxScore > 0 ? sorted.filter((f) => f.score <= threshold) : [];
+
+    parts.push("");
+    if (hot.length > 0) {
+      parts.push("Key files (active):");
+      for (const f of hot.slice(0, 10)) {
+        const label = f.kind === "modified" ? `modified ${f.access_count}x` : `read ${f.access_count}x`;
+        parts.push(`- ${f.path} (${label})`);
+      }
+    }
+    if (cold.length > 0 && cold.length <= 10) {
+      parts.push("Background:");
+      for (const f of cold.slice(0, 5)) {
+        const label = f.kind === "modified" ? `modified ${f.access_count}x` : `read ${f.access_count}x`;
+        parts.push(`- ${f.path} (${label})`);
+      }
+    } else if (cold.length > 10) {
+      parts.push(`Background: ${cold.length} other files`);
+    }
+  }
+
   // Key exchanges (cap at 8)
   if (thread.key_exchanges.length > 0) {
     const exchanges = thread.key_exchanges.slice(0, 8);
