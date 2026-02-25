@@ -17,6 +17,7 @@ export interface StateFiles {
   thread: Array<{ role: "user" | "agent"; gist: string }>;
   resources: { files: FileAccess[]; tools_used: string[] };
   open_items: string[];
+  learnings: Array<{ text: string; when: string }>;
 }
 
 const MAX_DECISIONS = 50;
@@ -24,6 +25,7 @@ const MAX_THREAD = 8;
 const MAX_TOOLS = 100;
 const MAX_FILES_PER_CATEGORY = 100;
 const MAX_OPEN_ITEMS = 50;
+const MAX_LEARNINGS = 10;
 
 function resolveStateDir(stateDir: string, sessionKey: string): string {
   return path.join(stateDir, "context", "state", sanitizeSessionKeyForPath(sessionKey));
@@ -72,6 +74,7 @@ function emptyState(): StateFiles {
     thread: [],
     resources: emptyResources(),
     open_items: [],
+    learnings: [],
   };
 }
 
@@ -97,6 +100,7 @@ export async function initStateDir(stateDir: string, sessionKey: string): Promis
     ["thread.json", []],
     ["resources.json", emptyResources()],
     ["open_items.json", []],
+    ["learnings.json", []],
   ];
 
   for (const [name, defaultValue] of files) {
@@ -182,6 +186,10 @@ export async function appendDecisionToState(
     if (decisions.length >= MAX_DECISIONS) {
       return;
     }
+    const fingerprint = normalizeLearningFingerprint(decision.what);
+    if (decisions.some((d) => normalizeLearningFingerprint(d.what) === fingerprint)) {
+      return;
+    }
     const id = `d${decisions.length + 1}`;
     decisions.push({ id, ...decision });
     await writeJsonFile(filePath, decisions);
@@ -233,18 +241,47 @@ export async function appendOpenItemToState(
   }
 }
 
+function normalizeLearningFingerprint(text: string): string {
+  return text.toLowerCase().replace(/^[\s\-*•.]+/, "").replace(/\s+/g, " ").trim();
+}
+
+export async function appendLearningToState(
+  stateDir: string,
+  sessionKey: string,
+  learning: { text: string; when: string },
+): Promise<void> {
+  const dir = resolveStateDir(stateDir, sessionKey);
+  const filePath = path.join(dir, "learnings.json");
+
+  try {
+    const learnings = await readJsonFile<StateFiles["learnings"]>(filePath, []);
+    if (learnings.length >= MAX_LEARNINGS) {
+      return;
+    }
+    const fingerprint = normalizeLearningFingerprint(learning.text);
+    if (learnings.some((l) => normalizeLearningFingerprint(l.text) === fingerprint)) {
+      return;
+    }
+    learnings.push(learning);
+    await writeJsonFile(filePath, learnings);
+  } catch (err) {
+    log.warn("Failed to append learning to state", { error: String(err) });
+  }
+}
+
 export async function readStateFiles(stateDir: string, sessionKey: string): Promise<StateFiles> {
   const dir = resolveStateDir(stateDir, sessionKey);
 
-  const [decisions, thread, rawResources, open_items] = await Promise.all([
+  const [decisions, thread, rawResources, open_items, learnings] = await Promise.all([
     readJsonFile<StateFiles["decisions"]>(path.join(dir, "decisions.json"), []),
     readJsonFile<StateFiles["thread"]>(path.join(dir, "thread.json"), []),
     readJsonFile<Record<string, unknown>>(path.join(dir, "resources.json"), {}),
     readJsonFile<StateFiles["open_items"]>(path.join(dir, "open_items.json"), []),
+    readJsonFile<StateFiles["learnings"]>(path.join(dir, "learnings.json"), []),
   ]);
   const resources = normalizeResources(rawResources);
 
-  return { decisions, thread, resources, open_items };
+  return { decisions, thread, resources, open_items, learnings };
 }
 
 export async function resetStateFiles(stateDir: string, sessionKey: string): Promise<void> {
@@ -256,6 +293,7 @@ export async function resetStateFiles(stateDir: string, sessionKey: string): Pro
       writeJsonFile(path.join(dir, "thread.json"), []),
       writeJsonFile(path.join(dir, "resources.json"), emptyResources()),
       writeJsonFile(path.join(dir, "open_items.json"), []),
+      writeJsonFile(path.join(dir, "learnings.json"), []),
     ]);
   } catch (err) {
     log.warn("Failed to reset state files", { error: String(err) });

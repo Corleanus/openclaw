@@ -236,7 +236,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           const stateFiles = await readStateFiles(cmRuntime.stateDir, cmRuntime.sessionKey);
           const usage = ctx.getContextUsage();
           const gauge = calculateUtilization(usage, cmRuntime.contextWindowTokens);
-          const messages = preparation.messagesToSummarize ?? [];
+          // Combine both arrays: messagesToSummarize has early history,
+          // turnPrefixMessages has the current turn's prefix (on split turns).
+          // Both contain user/assistant messages needed for topic/thread extraction.
+          const messages = [
+            ...(preparation.messagesToSummarize ?? []),
+            ...(preparation.turnPrefixMessages ?? []),
+          ];
           const latestCp = await readLatestCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey);
           const prevCount = latestCp?.meta?.compaction_count ?? 0;
           const checkpoint = buildCheckpointFromState(

@@ -22,6 +22,9 @@ import {
   readStateFiles,
   appendToolToState,
   appendFileToState,
+  appendDecisionToState,
+  appendOpenItemToState,
+  appendLearningToState,
 } from "../context-state.js";
 import type { StateFiles } from "../context-state.js";
 import { readCheckpointForInjection } from "../context-checkpoint-inject.js";
@@ -247,7 +250,7 @@ export function buildCheckpointFromState(
       key_exchanges: keyExchanges,
     },
     open_items: stateFiles.open_items ?? [],
-    learnings: [],
+    learnings: (stateFiles.learnings ?? []).map((l) => l.text),
   };
 }
 
@@ -312,6 +315,99 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
         log.warn(
           `Checkpoint write failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+      }
+    }
+
+    // ---------- Capture heuristics ----------
+    const captureMessages = event.messages ?? [];
+    if (captureMessages.length >= 2) {
+      // Decision capture: detect short user confirmation after long agent response
+      try {
+        let lastUserIdx = -1;
+        let lastAgentBeforeUser = -1;
+        for (let i = captureMessages.length - 1; i >= 0; i--) {
+          const role = (captureMessages[i] as { role?: string })?.role;
+          if (lastUserIdx < 0 && role === "user") {
+            lastUserIdx = i;
+          } else if (lastUserIdx >= 0 && role === "assistant") {
+            lastAgentBeforeUser = i;
+            break;
+          }
+        }
+        if (lastUserIdx >= 0 && lastAgentBeforeUser >= 0) {
+          const userText = extractText(captureMessages[lastUserIdx]);
+          const agentText = extractText(captureMessages[lastAgentBeforeUser]);
+          // Very short replies (< 15 chars, no question mark) are structural
+          // confirmations regardless of language. Longer short replies need a keyword.
+          const isShortConfirmation = userText.length < 15 && !userText.trim().endsWith("?");
+          const hasConfirmKeyword = /\b(yes|no|go|do it|ship it|pick|approve|proceed|let's go|sounds good|go ahead|implement|fix|ok|okay|sure|agreed|confirm|da|ja|oui|si|sim|vai)\b/i.test(userText);
+          if (
+            agentText.length > 0 &&
+            userText.length < 50 &&
+            agentText.length > 500 &&
+            (isShortConfirmation || hasConfirmKeyword)
+          ) {
+            await appendDecisionToState(runtime.stateDir, runtime.sessionKey, {
+              what: truncate(agentText, 200),
+              when: new Date().toISOString(),
+            });
+          }
+        }
+      } catch (err) {
+        log.warn(`Decision capture failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // Open items + learnings capture: scan latest assistant message
+      try {
+        let latestAssistant: typeof captureMessages[number] | undefined;
+        for (let i = captureMessages.length - 1; i >= 0; i--) {
+          if ((captureMessages[i] as { role?: string })?.role === "assistant") {
+            latestAssistant = captureMessages[i];
+            break;
+          }
+        }
+        if (latestAssistant) {
+          const assistantText = extractText(latestAssistant);
+          if (assistantText.length > 0) {
+            const lines = assistantText.split("\n");
+            let inCodeFence = false;
+
+            for (const line of lines) {
+              if (line.trimStart().startsWith("```")) {
+                inCodeFence = !inCodeFence;
+                continue;
+              }
+              if (inCodeFence) continue;
+
+              // Open items: bullet/list line with action keywords, or markdown checkbox
+              const isCheckbox = /^\s*-\s*\[\s*\]/.test(line);
+              if (
+                isCheckbox ||
+                (/^[\s]*[-*]|^\s*\d+\./.test(line) &&
+                  /\b(need to|TODO|still need|will check|remaining:|next step|haven't yet|FIXME)\b/i.test(line))
+              ) {
+                const trimmed = truncate(line.trim(), 150);
+                await appendOpenItemToState(runtime.stateDir, runtime.sessionKey, trimmed);
+              }
+
+              // Learnings: insight keywords + structural marker, or bold-colon pattern (language-agnostic)
+              const hasBoldColon = /^\s*\*\*[^*]+\*\*\s*:/.test(line);
+              if (
+                hasBoldColon ||
+                (/\b(turns out|gotcha:|note:|important:|discovered that|the issue was|root cause|lesson:|TIL|caveat:|warning:|beware:)\b/i.test(line) &&
+                  (/^[\s]*[-*]/.test(line) || /\*\*/.test(line) || /^\s*[A-Z]/.test(line)))
+              ) {
+                const trimmed = truncate(line.trim(), 200);
+                await appendLearningToState(runtime.stateDir, runtime.sessionKey, {
+                  text: trimmed,
+                  when: new Date().toISOString(),
+                });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        log.warn(`Open items/learnings capture failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
