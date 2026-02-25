@@ -292,7 +292,7 @@ function isRealUserMessage(msg: AgentMessage): boolean {
   // System-injected lines (e.g., from hooks or extensions)
   if (trimmed.startsWith("System:")) return false;
   // Cron/injected payloads can be embedded in user-role content, often with timestamp prefixes.
-  // Prefix semantics: optional [bracketed] groups then [System Message] word boundary.
+  // Prefix semantics: optional [bracketed] groups then [System Message] followed by whitespace or end.
   if (/^\s*(?:\[[^\]]+\]\s*)*\[System Message\](?=\s|$)/i.test(trimmed)) return false;
   return true;
 }
