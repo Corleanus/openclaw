@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sanitizeSessionKeyForPath } from "./context-checkpoint.js";
+import { isSemanticDuplicate } from "./context-dedup.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("context-state");
@@ -186,8 +187,7 @@ export async function appendDecisionToState(
     if (decisions.length >= MAX_DECISIONS) {
       return;
     }
-    const fingerprint = normalizeLearningFingerprint(decision.what);
-    if (decisions.some((d) => normalizeLearningFingerprint(d.what) === fingerprint)) {
+    if (decisions.some((d) => isSemanticDuplicate(d.what, decision.what))) {
       return;
     }
     const id = `d${decisions.length + 1}`;
@@ -228,7 +228,7 @@ export async function appendOpenItemToState(
 
   try {
     const items = await readJsonFile<StateFiles["open_items"]>(filePath, []);
-    if (items.includes(item)) {
+    if (items.some(existing => isSemanticDuplicate(existing, item))) {
       return;
     }
     if (items.length >= MAX_OPEN_ITEMS) {
@@ -284,6 +284,27 @@ export async function readStateFiles(stateDir: string, sessionKey: string): Prom
   return { decisions, thread, resources, open_items, learnings };
 }
 
+export async function writeLastToolCallToState(
+  stateDir: string,
+  sessionKey: string,
+  toolCall: { name: string; paramsSummary: string },
+): Promise<void> {
+  const dir = resolveStateDir(stateDir, sessionKey);
+  await fs.promises.mkdir(dir, { recursive: true });
+  await writeJsonFile(path.join(dir, "last_tool_call.json"), toolCall);
+}
+
+export async function readLastToolCallFromState(
+  stateDir: string,
+  sessionKey: string,
+): Promise<{ name: string; paramsSummary: string } | null> {
+  const dir = resolveStateDir(stateDir, sessionKey);
+  return readJsonFile<{ name: string; paramsSummary: string } | null>(
+    path.join(dir, "last_tool_call.json"),
+    null,
+  );
+}
+
 export async function resetStateFiles(stateDir: string, sessionKey: string): Promise<void> {
   const dir = resolveStateDir(stateDir, sessionKey);
 
@@ -294,6 +315,8 @@ export async function resetStateFiles(stateDir: string, sessionKey: string): Pro
       writeJsonFile(path.join(dir, "resources.json"), emptyResources()),
       writeJsonFile(path.join(dir, "open_items.json"), []),
       writeJsonFile(path.join(dir, "learnings.json"), []),
+      // Clear last_tool_call so stale values don't leak across compactions
+      fs.promises.unlink(path.join(dir, "last_tool_call.json")).catch(() => {}),
     ]);
   } catch (err) {
     log.warn("Failed to reset state files", { error: String(err) });

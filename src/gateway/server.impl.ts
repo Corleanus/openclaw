@@ -399,6 +399,11 @@ export async function startGatewayServer(
     logHooks,
     logPlugins,
   });
+  for (const server of httpServers) {
+    server.on('error', (err) => {
+      log.error(`HTTP server error: ${err.message}`);
+    });
+  }
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -454,7 +459,7 @@ export async function startGatewayServer(
 
   if (!minimalTestGateway) {
     setSkillsRemoteRegistry(nodeRegistry);
-    void primeRemoteSkillsCache();
+    void primeRemoteSkillsCache().catch(e => log.warn(`primeRemoteSkillsCache failed: ${e instanceof Error ? e.message : String(e)}`));
   }
   // Debounce skills-triggered node probes to avoid feedback loops and rapid-fire invokes.
   // Skills changes can happen in bursts (e.g., file watcher events), and each probe
@@ -473,7 +478,7 @@ export async function startGatewayServer(
         skillsRefreshTimer = setTimeout(() => {
           skillsRefreshTimer = null;
           const latest = loadConfig();
-          void refreshRemoteBinsForConnectedNodes(latest);
+          void refreshRemoteBinsForConnectedNodes(latest).catch(e => log.warn(`refreshRemoteBinsForConnectedNodes failed: ${e instanceof Error ? e.message : String(e)}`));
         }, skillsRefreshDelayMs);
       });
 

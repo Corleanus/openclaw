@@ -186,9 +186,17 @@ describe("appendOpenItemToState", () => {
     expect(state.open_items).toHaveLength(1);
   });
 
-  it("does not deduplicate different strings", async () => {
+  it("deduplicates case-insensitive matches (semantic dedup)", async () => {
     await appendOpenItemToState(tmpDir, SESSION_KEY, "Fix the bug");
-    await appendOpenItemToState(tmpDir, SESSION_KEY, "fix the bug"); // different case
+    await appendOpenItemToState(tmpDir, SESSION_KEY, "fix the bug"); // same meaning, different case
+
+    const state = await readStateFiles(tmpDir, SESSION_KEY);
+    expect(state.open_items).toHaveLength(1);
+  });
+
+  it("does not deduplicate genuinely different strings", async () => {
+    await appendOpenItemToState(tmpDir, SESSION_KEY, "Fix the authentication bug");
+    await appendOpenItemToState(tmpDir, SESSION_KEY, "Deploy gateway on staging port");
 
     const state = await readStateFiles(tmpDir, SESSION_KEY);
     expect(state.open_items).toHaveLength(2);

@@ -184,7 +184,21 @@ export async function runGatewayLoop(params: {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       onIteration();
-      server = await params.start();
+      try {
+        server = await params.start();
+      } catch (startError) {
+        gatewayLog.error(`Gateway startup failed: ${startError instanceof Error ? startError.message : String(startError)}`);
+        gatewayLog.error(`Stack: ${startError instanceof Error ? startError.stack : 'N/A'}`);
+        // One retry after brief delay
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          gatewayLog.info('Retrying gateway startup...');
+          server = await params.start();
+        } catch (retryError) {
+          gatewayLog.error(`Gateway startup retry failed: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+          throw retryError; // Let process exit with full error info
+        }
+      }
       await new Promise<void>((resolve) => {
         restartResolver = resolve;
       });

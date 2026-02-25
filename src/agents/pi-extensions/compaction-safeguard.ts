@@ -20,11 +20,12 @@ import { writeCheckpoint, pruneOldCheckpoints, readLatestCheckpoint, atomicWrite
 import { enrichCheckpoint } from "../context-enrichment.js";
 import { calculateUtilization } from "../context-gauge.js";
 import { promoteLearningsToCrossSession } from "../context-learnings.js";
-import { readStateFiles, resetStateFiles } from "../context-state.js";
+import { readStateFiles, resetStateFiles, readLastToolCallFromState } from "../context-state.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCheckpointFromState } from "./context-manager.js";
 import { getContextManagerRuntime } from "./context-manager-runtime.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
+import { isSemanticDuplicate } from "../../agents/context-dedup.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 const FALLBACK_SUMMARY =
@@ -228,6 +229,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         ];
         latestCp = await readLatestCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey);
         const prevCount = latestCp?.meta?.compaction_count ?? 0;
+        // Hydrate lastToolCall from state files only when runtime has no value (avoids stale file overriding fresh runtime)
+        if (!cmRuntime.lastToolCall) {
+          const persistedToolCall = await readLastToolCallFromState(cmRuntime.stateDir, cmRuntime.sessionKey);
+          if (persistedToolCall) {
+            cmRuntime.lastToolCall = persistedToolCall;
+          }
+        }
         checkpoint = buildCheckpointFromState(
           stateFiles,
           gauge,
@@ -289,8 +297,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             if (enrichment.decision_summaries.length > 0) {
               const llmDecisions = enrichment.decision_summaries;
               const heuristicDecisions = checkpoint.decisions.map(d => d.what);
-              const llmLower = new Set(llmDecisions.map(d => d.toLowerCase().trim()));
-              const preserved = heuristicDecisions.filter(d => !llmLower.has(d.toLowerCase().trim()));
+              const preserved = heuristicDecisions.filter(hd =>
+                !llmDecisions.some(ld => isSemanticDuplicate(hd, ld))
+              );
               const merged = [...llmDecisions, ...preserved];
               checkpoint.decisions = merged.map((d, i) => ({
                 id: `d${i + 1}`, what: d, when: checkpoint!.meta.created_at,
@@ -298,8 +307,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             }
             if (enrichment.open_items_refined.length > 0) {
               const llmItems = enrichment.open_items_refined;
-              const llmItemsLower = new Set(llmItems.map(i => i.toLowerCase().trim()));
-              const preservedItems = checkpoint.open_items.filter(i => !llmItemsLower.has(i.toLowerCase().trim()));
+              const preservedItems = checkpoint.open_items.filter(hi =>
+                !llmItems.some(li => isSemanticDuplicate(hi, li))
+              );
               checkpoint.open_items = [...llmItems, ...preservedItems];
             }
             checkpoint.meta.enrichment = "llm";

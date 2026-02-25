@@ -34,6 +34,8 @@ function buildEnrichmentPrompt(
   const decisions = checkpoint.decisions.map((d) => `- ${d.what}`).join("\n") || "(none)";
   const openItems = checkpoint.open_items.map((i) => `- ${i}`).join("\n") || "(none)";
 
+  // Token budget: examples add ~100 tokens to the prompt. If prompt + messages
+  // gets too large, trim this slice from 20 to 15 to compensate.
   const recentSlice = messages.slice(-20).map((m) => {
     const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
     return `${m.role}: ${text.slice(0, 300)}`;
@@ -54,7 +56,17 @@ ${openItems}
 ${recentSlice}
 </recent-messages>
 
-Refine these existing decisions: deduplicate, clarify wording, add any missed from recent context, remove resolved ones. Do NOT discard decisions you cannot verify — they may be from earlier in the session.
+Refine these existing decisions:
+- REMOVE entries that are not actual decisions (conversational text, questions, narrative)
+- Deduplicate semantically similar entries (keep the cleaner version)
+- Clarify wording to be concise, action-oriented statements
+- Add any decisions from recent context that are missing
+- Keep decisions you cannot verify as resolved — but DO remove entries that are clearly not decisions (e.g., starts with "You're right" or "Ohoho")
+
+An entry is a DECISION if it records: a choice made, an approach selected, a trade-off accepted, or a direction confirmed. Conversational acknowledgments, questions, and narrative descriptions are NOT decisions.
+
+GOOD decisions: "Use atomicWriteFile for checkpoint re-write to bypass dedup", "Merge strategy: LLM decisions + preserved heuristics via set-diff"
+BAD (not decisions): "You're right, I overcomplicated it", "- I need to send him a plan", "Ohoho. Claude Code Remote Control"
 
 Produce JSON:
 {

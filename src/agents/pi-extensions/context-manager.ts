@@ -25,6 +25,7 @@ import {
   appendDecisionToState,
   appendOpenItemToState,
   appendLearningToState,
+  writeLastToolCallToState,
 } from "../context-state.js";
 import type { StateFiles } from "../context-state.js";
 import { readCheckpointForInjection } from "../context-checkpoint-inject.js";
@@ -41,14 +42,14 @@ const resumeInjected = new Set<string>();
 
 function findLastUserMessage(messages: AgentMessage[]): AgentMessage | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if ((messages[i] as { role?: string })?.role === "user") return messages[i];
+    if (isRealUserMessage(messages[i])) return messages[i];
   }
   return undefined;
 }
 
 function findFirstUserMessage(messages: AgentMessage[]): AgentMessage | undefined {
   for (const msg of messages) {
-    if ((msg as { role?: string })?.role === "user") return msg;
+    if (isRealUserMessage(msg)) return msg;
   }
   return undefined;
 }
@@ -102,20 +103,18 @@ function buildKeyExchanges(
   // Collect user-agent pairs — scan forward past custom/toolResult messages
   // to find the next assistant message after each user message
   for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i] as { role?: string };
-    if (msg?.role === "user") {
-      let agent: AgentMessage | undefined;
-      for (let j = i + 1; j < messages.length; j++) {
-        const candidate = messages[j] as { role?: string };
-        if (candidate?.role === "assistant") {
-          agent = messages[j];
-          break;
-        }
-        // Stop scanning if we hit the next user message
-        if (candidate?.role === "user") break;
+    if (!isRealUserMessage(messages[i])) continue;
+    let agent: AgentMessage | undefined;
+    for (let j = i + 1; j < messages.length; j++) {
+      const candidate = messages[j] as { role?: string };
+      if (candidate?.role === "assistant") {
+        agent = messages[j];
+        break;
       }
-      userAgentPairs.push({ user: messages[i], agent });
+      // Stop scanning if we hit the next real user message
+      if (isRealUserMessage(messages[j])) break;
     }
+    userAgentPairs.push({ user: messages[i], agent });
   }
 
   if (userAgentPairs.length === 0) return [];
@@ -166,6 +165,109 @@ function summarizeToolParams(input: Record<string, unknown> | undefined): string
 function extractChannel(sessionKey: string): string | null {
   const colonIdx = sessionKey.indexOf(":");
   return colonIdx > 0 ? sessionKey.slice(0, colonIdx) : null;
+}
+
+// ---------- Decision extraction ----------
+
+const ACTION_VERBS = new Set([
+  "use", "add", "remove", "replace", "create", "implement", "switch", "move",
+  "keep", "skip", "merge", "split", "export", "import", "change", "fix",
+  "update", "deploy", "persist", "store", "read", "write", "inject", "filter",
+  "track", "chose", "decided",
+]);
+
+const FILLER_RE = /^(you're right|ohoho|haha|hmm|well,|okay so|sure,|yeah|ok |ah |oh )/i;
+
+function hasActionVerb(text: string): boolean {
+  const words = text.toLowerCase().split(/\s+/).slice(0, 10);
+  return words.some((w) => ACTION_VERBS.has(w.replace(/[^a-z]/g, "")));
+}
+
+function hasStructuralMarker(text: string): boolean {
+  return /\*\*/.test(text) || /^[-*]\s/.test(text) || /^\d+\.\s/.test(text) || /:\s/.test(text);
+}
+
+function passesQualityGate(text: string): boolean {
+  if (FILLER_RE.test(text)) return false;
+  if (text.trimEnd().endsWith("?")) return false;
+  if (!hasActionVerb(text) && !hasStructuralMarker(text)) return false;
+  return true;
+}
+
+function extractDecisionFromResponse(text: string): string | null {
+  const lines = text.split("\n");
+  let inCodeFence = false;
+
+  const candidates: Array<{ tier: number; line: string }> = [];
+
+  for (const raw of lines) {
+    const line = raw.trimStart();
+    if (line.startsWith("```")) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) continue;
+    if (!line) continue;
+
+    // Tier 1: Explicit decision markers
+    if (/^(Decision:|Plan:|Approach:|Going with|Chose|Choosing)/i.test(line)) {
+      candidates.push({ tier: 1, line: raw.trim() });
+      continue;
+    }
+
+    // Tier 2: Action intent
+    if (
+      /^(I'll|We'll|Let's|I will|We will|I'm going to|We're going to)/i.test(line) ||
+      /^(The approach is|The plan is|The fix is|The solution is)/i.test(line)
+    ) {
+      candidates.push({ tier: 2, line: raw.trim() });
+      continue;
+    }
+
+    // Tier 3: Structured formats — bold heading (with action verb) or bold-prefixed bullet
+    if (/^[-*]\s+\*\*[^*]+\*\*/.test(line)) {
+      candidates.push({ tier: 3, line: raw.trim() });
+      continue;
+    }
+    if (line.startsWith("**") && hasActionVerb(line)) {
+      candidates.push({ tier: 3, line: raw.trim() });
+      continue;
+    }
+
+    // Tier 4: Action-verb bullets (plain bullets or numbered)
+    if (/^[-*]\s/.test(line) || /^\d+\.\s/.test(line)) {
+      const words = line.split(/\s+/).slice(0, 5);
+      if (words.some((w) => ACTION_VERBS.has(w.toLowerCase().replace(/[^a-z]/g, "")))) {
+        candidates.push({ tier: 4, line: raw.trim() });
+      }
+    }
+  }
+
+  // Pick highest tier (lowest number), first match within tier
+  candidates.sort((a, b) => a.tier - b.tier);
+
+  for (const c of candidates) {
+    if (passesQualityGate(c.line)) {
+      return truncate(c.line, 200);
+    }
+  }
+
+  return null;
+}
+
+// ---------- System message filtering ----------
+
+function isRealUserMessage(msg: AgentMessage): boolean {
+  const role = (msg as { role?: string })?.role;
+  if (role !== "user") return false;
+  const text = extractText(msg);
+  if (text.includes("<checkpoint-data")) return false;
+  if (text.includes("schema: openclaw/checkpoint")) return false;
+  if (text.startsWith("Summary unavailable") || text.startsWith("This summary covers")) return false;
+  if (text.startsWith("Token utilization:") || text.startsWith("## Token Gauge")) return false;
+  // System-injected lines (e.g., from hooks or extensions)
+  if (text.startsWith("System:")) return false;
+  return true;
 }
 
 // ---------- Exported checkpoint builder ----------
@@ -340,7 +442,8 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
     // ---------- Capture heuristics ----------
     const captureMessages = event.messages ?? [];
     if (captureMessages.length >= 2) {
-      // Decision capture: detect short user confirmation after long agent response
+      // Decision capture: detect short user confirmation after long agent response,
+      // then extract a meaningful decision line from the agent text
       try {
         let lastUserIdx = -1;
         let lastAgentBeforeUser = -1;
@@ -356,8 +459,6 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
         if (lastUserIdx >= 0 && lastAgentBeforeUser >= 0) {
           const userText = extractText(captureMessages[lastUserIdx]);
           const agentText = extractText(captureMessages[lastAgentBeforeUser]);
-          // Very short replies (< 15 chars, no question mark) are structural
-          // confirmations regardless of language. Longer short replies need a keyword.
           const isShortConfirmation = userText.length < 15 && !userText.trim().endsWith("?");
           const hasConfirmKeyword = /\b(yes|no|go|do it|ship it|pick|approve|proceed|let's go|sounds good|go ahead|implement|fix|ok|okay|sure|agreed|confirm|da|ja|oui|si|sim|vai)\b/i.test(userText);
           if (
@@ -366,10 +467,13 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
             agentText.length > 500 &&
             (isShortConfirmation || hasConfirmKeyword)
           ) {
-            await appendDecisionToState(runtime.stateDir, runtime.sessionKey, {
-              what: truncate(agentText, 200),
-              when: new Date().toISOString(),
-            });
+            const decision = extractDecisionFromResponse(agentText);
+            if (decision) {
+              await appendDecisionToState(runtime.stateDir, runtime.sessionKey, {
+                what: decision,
+                when: new Date().toISOString(),
+              });
+            }
           }
         }
       } catch (err) {
@@ -469,6 +573,11 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
       paramsSummary: summarizeToolParams(event.input as Record<string, unknown> | undefined),
     };
 
+    // Persist to state files so checkpoint builder can read it reliably
+    void writeLastToolCallToState(runtime.stateDir, runtime.sessionKey, runtime.lastToolCall).catch(e =>
+      log.warn?.(`Failed to persist lastToolCall: ${e instanceof Error ? e.message : String(e)}`)
+    );
+
     // Capture file paths from read/write/edit tools
     const input = event.input as Record<string, unknown> | undefined;
     if (input) {
@@ -513,3 +622,10 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
     }
   });
 }
+
+export const __testing = {
+  extractDecisionFromResponse,
+  isRealUserMessage,
+  passesQualityGate,
+  hasActionVerb,
+} as const;
