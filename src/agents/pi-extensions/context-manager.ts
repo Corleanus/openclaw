@@ -1,0 +1,328 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type {
+  ExtensionAPI,
+  ContextEvent,
+  ExtensionContext,
+  ToolResultEvent,
+  FileOperations,
+} from "@mariozechner/pi-coding-agent";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getContextManagerRuntime } from "./context-manager-runtime.js";
+import type { ContextManagerRuntimeValue } from "./context-manager-runtime.js";
+import { calculateUtilization, formatGaugeLine } from "../context-gauge.js";
+import type { GaugeResult } from "../context-gauge.js";
+import { writeCheckpoint, pruneOldCheckpoints, readLatestCheckpoint } from "../context-checkpoint.js";
+import type {
+  Checkpoint,
+  CheckpointTrigger,
+  CheckpointResources,
+} from "../context-checkpoint.js";
+import {
+  initStateDir,
+  readStateFiles,
+  resetStateFiles,
+  appendToolToState,
+  appendFileToState,
+} from "../context-state.js";
+import type { StateFiles } from "../context-state.js";
+import { readCheckpointForInjection } from "../context-checkpoint-inject.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
+
+const log = createSubsystemLogger("context-manager");
+
+// ---------- Session-scoped tracking ----------
+
+const initializedSessions = new Set<string>();
+const resumeInjected = new Set<string>();
+
+// ---------- Helper functions ----------
+
+function findLastUserMessage(messages: AgentMessage[]): AgentMessage | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if ((messages[i] as { role?: string })?.role === "user") return messages[i];
+  }
+  return undefined;
+}
+
+function findFirstUserMessage(messages: AgentMessage[]): AgentMessage | undefined {
+  for (const msg of messages) {
+    if ((msg as { role?: string })?.role === "user") return msg;
+  }
+  return undefined;
+}
+
+function extractText(msg: AgentMessage): string {
+  const content = (msg as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(
+        (b: unknown) =>
+          typeof b === "object" && b !== null && (b as { type?: string }).type === "text",
+      )
+      .map((b: unknown) => (b as { text?: string }).text ?? "")
+      .join("\n");
+  }
+  return "";
+}
+
+function truncate(text: string, maxLen: number): string {
+  return text.length <= maxLen ? text : text.slice(0, maxLen - 3) + "...";
+}
+
+function buildThreadSummary(
+  first: AgentMessage | undefined,
+  last: AgentMessage | undefined,
+): string {
+  const firstText = first ? truncate(extractText(first), 100) : "";
+  const lastText = last ? truncate(extractText(last), 100) : "";
+  if (firstText && lastText && first !== last) return `${firstText} ... ${lastText}`;
+  return firstText || lastText || "No conversation context";
+}
+
+function buildKeyExchanges(
+  messages: AgentMessage[],
+): Array<{ role: "user" | "agent"; gist: string }> {
+  const exchanges: Array<{ role: "user" | "agent"; gist: string }> = [];
+  const userAgentPairs: Array<{ user: AgentMessage; agent?: AgentMessage }> = [];
+
+  // Collect user-agent pairs
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i] as { role?: string };
+    if (msg?.role === "user") {
+      const next = messages[i + 1] as { role?: string } | undefined;
+      userAgentPairs.push({
+        user: messages[i],
+        agent: next?.role === "assistant" ? messages[i + 1] : undefined,
+      });
+    }
+  }
+
+  if (userAgentPairs.length === 0) return [];
+
+  // Always include first
+  const first = userAgentPairs[0];
+  exchanges.push({ role: "user", gist: truncate(extractText(first.user), 120) });
+  if (first.agent) {
+    exchanges.push({ role: "agent", gist: truncate(extractText(first.agent), 120) });
+  }
+
+  // Include decision points (short user reply after long agent response)
+  for (let i = 1; i < userAgentPairs.length - 2; i++) {
+    const prevAgent = userAgentPairs[i - 1]?.agent;
+    if (prevAgent && extractText(prevAgent).length > 500) {
+      const userText = extractText(userAgentPairs[i].user);
+      if (userText.length < 50) {
+        exchanges.push({ role: "user", gist: truncate(userText, 120) });
+      }
+    }
+  }
+
+  // Always include last 2 pairs
+  const lastPairs = userAgentPairs.slice(-2);
+  for (const pair of lastPairs) {
+    if (pair === first) continue; // Skip if already included
+    exchanges.push({ role: "user", gist: truncate(extractText(pair.user), 120) });
+    if (pair.agent) {
+      exchanges.push({ role: "agent", gist: truncate(extractText(pair.agent), 120) });
+    }
+  }
+
+  return exchanges.slice(0, 8); // Cap at 8
+}
+
+function extractChannel(sessionKey: string): string | null {
+  const colonIdx = sessionKey.indexOf(":");
+  return colonIdx > 0 ? sessionKey.slice(0, colonIdx) : null;
+}
+
+// ---------- Exported checkpoint builder ----------
+
+export function buildCheckpointFromState(
+  stateFiles: StateFiles,
+  gauge: GaugeResult,
+  messages: AgentMessage[],
+  runtime: ContextManagerRuntimeValue,
+  trigger: CheckpointTrigger,
+  options?: { isSplitTurn?: boolean; fileOps?: FileOperations; compactionCount?: number },
+): Checkpoint {
+  // Extract topic from last user message
+  const lastUserMsg = findLastUserMessage(messages);
+  const topic = lastUserMsg ? truncate(extractText(lastUserMsg), 200) : "Unknown topic";
+
+  // Build thread summary from first + last user messages
+  const firstUserMsg = findFirstUserMessage(messages);
+  const threadSummary = buildThreadSummary(firstUserMsg, lastUserMsg);
+
+  // Build key exchanges (subsample: first, decision points, last 2 pairs)
+  const keyExchanges = buildKeyExchanges(messages);
+
+  // Merge file ops from compaction preparation if available
+  const resources: CheckpointResources = {
+    files_read: [
+      ...new Set([
+        ...stateFiles.resources.files_read,
+        ...(options?.fileOps ? [...options.fileOps.read] : []),
+      ]),
+    ],
+    files_modified: [
+      ...new Set([
+        ...stateFiles.resources.files_modified,
+        ...(options?.fileOps ? [...options.fileOps.edited, ...options.fileOps.written] : []),
+      ]),
+    ],
+    tools_used: [...stateFiles.resources.tools_used],
+  };
+
+  return {
+    schema: "openclaw/checkpoint",
+    schema_version: 1,
+    meta: {
+      checkpoint_id: "", // Set by writeCheckpoint
+      session_key: runtime.sessionKey,
+      session_file: null,
+      created_at: new Date().toISOString(),
+      trigger,
+      compaction_count: options?.compactionCount ?? 0,
+      token_usage: {
+        input_tokens: gauge.inputTokens,
+        context_window: gauge.contextWindow,
+        utilization: gauge.utilization,
+      },
+      previous_checkpoint: null, // Set by writeCheckpoint
+      channel: extractChannel(runtime.sessionKey),
+      agent_id: null,
+    },
+    working: {
+      topic,
+      status: "in_progress",
+      interrupted: options?.isSplitTurn ?? false,
+      last_tool_call: null,
+      next_action: "",
+    },
+    decisions: stateFiles.decisions.map((d, i) => ({
+      id: d.id ?? `d${i + 1}`,
+      what: d.what,
+      when: d.when,
+    })),
+    resources,
+    thread: {
+      summary: threadSummary,
+      key_exchanges: keyExchanges,
+    },
+    open_items: stateFiles.open_items ?? [],
+    learnings: [],
+  };
+}
+
+// ---------- Extension ----------
+
+export default function contextManagerExtension(api: ExtensionAPI): void {
+  // context event: fires every LLM call
+  api.on("context", async (event: ContextEvent, ctx: ExtensionContext) => {
+    const runtime = getContextManagerRuntime(ctx.sessionManager);
+    if (!runtime) return {};
+
+    // Ensure state directory exists on first context event per session
+    if (!initializedSessions.has(runtime.sessionKey)) {
+      await initStateDir(runtime.stateDir, runtime.sessionKey);
+      initializedSessions.add(runtime.sessionKey);
+    }
+
+    // Session resume: inject checkpoint from prior session on first context event
+    if (!resumeInjected.has(runtime.sessionKey)) {
+      resumeInjected.add(runtime.sessionKey);
+      try {
+        const resumeContent = await readCheckpointForInjection(
+          runtime.stateDir, runtime.sessionKey, "session-resume",
+        );
+        if (resumeContent) {
+          enqueueSystemEvent(resumeContent, { sessionKey: runtime.sessionKey });
+          log.info("Injected session-resume checkpoint");
+        }
+      } catch (err) {
+        log.warn(`Session resume injection failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Calculate utilization
+    const usage = ctx.getContextUsage();
+    const gauge = calculateUtilization(usage, runtime.contextWindowTokens);
+
+    // If >= 80%: write checkpoint
+    let checkpointSaved = false;
+    if (gauge.shouldCheckpoint) {
+      try {
+        const stateFiles = await readStateFiles(runtime.stateDir, runtime.sessionKey);
+        const messages = event.messages ?? [];
+        const latestCp = await readLatestCheckpoint(runtime.stateDir, runtime.sessionKey);
+        const prevCount = latestCp?.meta?.compaction_count ?? 0;
+        const checkpoint = buildCheckpointFromState(
+          stateFiles,
+          gauge,
+          messages,
+          runtime,
+          "auto-80pct",
+          { compactionCount: prevCount },
+        );
+        const result = await writeCheckpoint(runtime.stateDir, runtime.sessionKey, checkpoint);
+        if (result.written) {
+          await resetStateFiles(runtime.stateDir, runtime.sessionKey);
+          await pruneOldCheckpoints(runtime.stateDir, runtime.sessionKey);
+          checkpointSaved = true;
+        }
+      } catch (err) {
+        log.warn(
+          `Checkpoint write failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // If >= 70%: inject gauge line into agent context via CustomMessage
+    if (gauge.shouldInject) {
+      const gaugeLine = formatGaugeLine(gauge, checkpointSaved);
+      log.info(gaugeLine);
+      const gaugeMsg = {
+        role: "custom" as const,
+        customType: "system-event",
+        content: gaugeLine,
+        display: false,
+        timestamp: Date.now(),
+      };
+      return { messages: [...event.messages, gaugeMsg as AgentMessage] };
+    }
+
+    return {};
+  });
+
+  // tool_result event: fires after each tool call
+  api.on("tool_result", async (event: ToolResultEvent, ctx: ExtensionContext) => {
+    const runtime = getContextManagerRuntime(ctx.sessionManager);
+    if (!runtime) return;
+
+    const toolName = event.toolName;
+
+    // Capture tool name to resources
+    await appendToolToState(runtime.stateDir, runtime.sessionKey, toolName).catch(() => {});
+
+    // Capture file paths from read/write/edit tools
+    const input = event.input as Record<string, unknown> | undefined;
+    if (input) {
+      const filePath =
+        typeof input.path === "string"
+          ? input.path
+          : typeof input.file_path === "string"
+            ? input.file_path
+            : null;
+      if (filePath) {
+        const kind =
+          toolName === "read" || toolName === "grep" || toolName === "find" || toolName === "ls"
+            ? "read"
+            : "modified";
+        await appendFileToState(runtime.stateDir, runtime.sessionKey, filePath, kind).catch(
+          () => {},
+        );
+      }
+    }
+  });
+}

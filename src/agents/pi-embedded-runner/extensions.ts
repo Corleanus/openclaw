@@ -1,10 +1,13 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
+import contextManagerExtension from "../pi-extensions/context-manager.js";
+import { setContextManagerRuntime } from "../pi-extensions/context-manager-runtime.js";
 import contextPruningExtension from "../pi-extensions/context-pruning.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
@@ -67,6 +70,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  sessionKey?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -83,6 +87,17 @@ export function buildEmbeddedExtensionFactories(params: {
       contextWindowTokens: contextWindowInfo.tokens,
     });
     factories.push(compactionSafeguardExtension);
+  }
+  // Context Manager extension — always registered when sessionKey is available
+  if (params.sessionKey) {
+    const stateDir = resolveStateDir();
+    const contextWindowTokens = resolveContextWindowTokens(params);
+    setContextManagerRuntime(params.sessionManager, {
+      sessionKey: params.sessionKey,
+      contextWindowTokens,
+      stateDir,
+    });
+    factories.push(contextManagerExtension);
   }
   const pruningFactory = buildContextPruningFactory(params);
   if (pruningFactory) {

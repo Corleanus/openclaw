@@ -16,7 +16,12 @@ import {
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
+import { writeCheckpoint, pruneOldCheckpoints, readLatestCheckpoint } from "../context-checkpoint.js";
+import { calculateUtilization } from "../context-gauge.js";
+import { readStateFiles, resetStateFiles } from "../context-state.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { buildCheckpointFromState } from "./context-manager.js";
+import { getContextManagerRuntime } from "./context-manager-runtime.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -224,6 +229,39 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
 
     try {
+      // --- Context Manager: write checkpoint before LLM summarization ---
+      try {
+        const cmRuntime = getContextManagerRuntime(ctx.sessionManager);
+        if (cmRuntime) {
+          const stateFiles = await readStateFiles(cmRuntime.stateDir, cmRuntime.sessionKey);
+          const usage = ctx.getContextUsage();
+          const gauge = calculateUtilization(usage, cmRuntime.contextWindowTokens);
+          const messages = preparation.messagesToSummarize ?? [];
+          const latestCp = await readLatestCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey);
+          const prevCount = latestCp?.meta?.compaction_count ?? 0;
+          const checkpoint = buildCheckpointFromState(
+            stateFiles,
+            gauge,
+            messages,
+            cmRuntime,
+            "compaction",
+            { isSplitTurn: preparation.isSplitTurn, fileOps: preparation.fileOps, compactionCount: prevCount + 1 },
+          );
+          const result = await writeCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey, checkpoint);
+          if (result.written) {
+            await resetStateFiles(cmRuntime.stateDir, cmRuntime.sessionKey);
+            await pruneOldCheckpoints(cmRuntime.stateDir, cmRuntime.sessionKey);
+          }
+        }
+      } catch (cpError) {
+        log.warn(
+          `Context checkpoint write failed during compaction: ${
+            cpError instanceof Error ? cpError.message : String(cpError)
+          }`,
+        );
+      }
+      // --- End Context Manager checkpoint ---
+
       const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;

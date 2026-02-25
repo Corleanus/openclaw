@@ -49,6 +49,8 @@ import {
   formatAuditWarning,
   readSessionMessages,
 } from "./post-compaction-audit.js";
+import { readCheckpointForInjection } from "../../agents/context-checkpoint-inject.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
@@ -686,6 +688,21 @@ export async function runReplyAgent(params: {
           })
           .catch(() => {
             // Silent failure — post-compaction context is best-effort
+          });
+
+        // Inject checkpoint data post-compaction
+        readCheckpointForInjection(
+          resolveStateDir(),
+          sessionKey,
+          "post-compaction",
+        )
+          .then((checkpointContent) => {
+            if (checkpointContent) {
+              enqueueSystemEvent(checkpointContent, { sessionKey });
+            }
+          })
+          .catch(() => {
+            // Silent failure — checkpoint injection is best-effort
           });
 
         // Set pending audit flag for Layer 3 (post-compaction read audit)
