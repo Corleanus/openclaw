@@ -9,11 +9,13 @@ import {
   initStateDir,
   readLastToolCallFromState,
   readStateFiles,
+  readThreadSnapshot,
   resetStateFiles,
   scoreFileAccess,
   writeLastToolCallToState,
+  writeThreadSnapshot,
 } from "./context-state.js";
-import type { FileAccess } from "./context-state.js";
+import type { FileAccess, ThreadSnapshot } from "./context-state.js";
 
 let tmpDir: string;
 const SESSION_KEY = "test-session";
@@ -290,6 +292,54 @@ describe("appendLearningToState", () => {
   });
 });
 
+// ---------- writeThreadSnapshot + readThreadSnapshot ----------
+
+describe("writeThreadSnapshot + readThreadSnapshot", () => {
+  beforeEach(async () => {
+    await initStateDir(tmpDir, SESSION_KEY);
+  });
+
+  it("writes and reads a thread snapshot", async () => {
+    const snapshot: ThreadSnapshot = {
+      topic: "Fix checkpoint bugs",
+      summary: "Session started with: fix bugs. Latest user focus: commit.",
+      key_exchanges: [
+        { role: "user", gist: "fix the 5 bugs" },
+        { role: "agent", gist: "analyzed all 5 bugs and proposed fixes" },
+      ],
+      updated_at: "2025-01-01T12:00:00Z",
+    };
+    await writeThreadSnapshot(tmpDir, SESSION_KEY, snapshot);
+
+    const result = await readThreadSnapshot(tmpDir, SESSION_KEY);
+    expect(result).toEqual(snapshot);
+  });
+
+  it("returns null when no snapshot exists", async () => {
+    const result = await readThreadSnapshot(tmpDir, SESSION_KEY);
+    expect(result).toBeNull();
+  });
+
+  it("overwrites previous snapshot", async () => {
+    await writeThreadSnapshot(tmpDir, SESSION_KEY, {
+      topic: "Old topic",
+      summary: "Old summary",
+      key_exchanges: [],
+      updated_at: "2025-01-01T00:00:00Z",
+    });
+    await writeThreadSnapshot(tmpDir, SESSION_KEY, {
+      topic: "New topic",
+      summary: "New summary",
+      key_exchanges: [{ role: "user", gist: "new message" }],
+      updated_at: "2025-01-01T01:00:00Z",
+    });
+
+    const result = await readThreadSnapshot(tmpDir, SESSION_KEY);
+    expect(result?.topic).toBe("New topic");
+    expect(result?.key_exchanges).toHaveLength(1);
+  });
+});
+
 // ---------- readStateFiles + resetStateFiles (integration) ----------
 
 describe("readStateFiles + resetStateFiles", () => {
@@ -334,6 +384,23 @@ describe("readStateFiles + resetStateFiles", () => {
     expect(state.thread).toEqual([]);
     expect(state.resources.files).toEqual([]);
     expect(state.resources.tools_used).toEqual([]);
+  });
+
+  it("clears thread_snapshot after resetStateFiles", async () => {
+    await writeThreadSnapshot(tmpDir, SESSION_KEY, {
+      topic: "Fix checkpoint bugs",
+      summary: "Session started with: fix bugs. Latest user focus: commit.",
+      key_exchanges: [{ role: "user", gist: "fix the 5 bugs" }],
+      updated_at: "2025-01-01T00:00:00Z",
+    });
+
+    const beforeReset = await readThreadSnapshot(tmpDir, SESSION_KEY);
+    expect(beforeReset).toMatchObject({ topic: "Fix checkpoint bugs" });
+
+    await resetStateFiles(tmpDir, SESSION_KEY);
+
+    const afterReset = await readThreadSnapshot(tmpDir, SESSION_KEY);
+    expect(afterReset).toBeNull();
   });
 
   it("clears last_tool_call after resetStateFiles", async () => {

@@ -26,8 +26,10 @@ import {
   appendOpenItemToState,
   appendLearningToState,
   writeLastToolCallToState,
+  writeThreadSnapshot,
+  readThreadSnapshot,
 } from "../context-state.js";
-import type { StateFiles } from "../context-state.js";
+import type { StateFiles, ThreadSnapshot } from "../context-state.js";
 import { readCheckpointForInjection } from "../context-checkpoint-inject.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 
@@ -149,13 +151,18 @@ function buildKeyExchanges(
     pushExchange(exchanges, "agent", toGist(first.agent, "agent"));
   }
 
-  // Include decision points (short user reply after long agent response)
-  for (let i = 1; i < userAgentPairs.length - 2; i++) {
-    const prevAgent = userAgentPairs[i - 1]?.agent;
-    if (prevAgent && extractText(prevAgent).length > 500) {
-      const userText = extractText(userAgentPairs[i].user);
-      if (userText.length < 50) {
-        pushExchange(exchanges, "user", truncate(userText.trim(), 120));
+  // Middle pairs: evenly sample up to 3 pairs to capture the conversation arc
+  if (userAgentPairs.length > 3) {
+    const middleStart = 1;
+    const middleEnd = userAgentPairs.length - 2;
+    const middleCount = middleEnd - middleStart;
+    const maxMiddle = 3;
+    const step = Math.max(1, Math.ceil(middleCount / maxMiddle));
+    for (let i = middleStart; i < middleEnd; i += step) {
+      const pair = userAgentPairs[i];
+      pushExchange(exchanges, "user", toGist(pair.user, "user"));
+      if (pair.agent) {
+        pushExchange(exchanges, "agent", toGist(pair.agent, "agent"));
       }
     }
   }
@@ -305,18 +312,22 @@ export function buildCheckpointFromState(
   messages: AgentMessage[],
   runtime: ContextManagerRuntimeValue,
   trigger: CheckpointTrigger,
-  options?: { isSplitTurn?: boolean; fileOps?: FileOperations; compactionCount?: number },
+  options?: { isSplitTurn?: boolean; fileOps?: FileOperations; compactionCount?: number; threadSnapshot?: ThreadSnapshot | null },
 ): Checkpoint {
-  // Extract topic from last user message
+  // Extract topic: prefer snapshot (built from full message history) over cpMessages (partial at compaction)
   const lastUserMsg = findLastUserMessage(messages);
-  const topic = lastUserMsg ? truncate(extractText(lastUserMsg), 200) : "Unknown topic";
+  const msgTopic = lastUserMsg ? truncate(extractText(lastUserMsg), 200) : "";
+  const topic = options?.threadSnapshot?.topic || msgTopic || "Unknown topic";
 
-  // Build thread summary from first + last user messages
+  // Build thread: prefer snapshot over cpMessages-based extraction
   const firstUserMsg = findFirstUserMessage(messages);
-  const threadSummary = buildThreadSummary(firstUserMsg, lastUserMsg);
+  const msgSummary = buildThreadSummary(firstUserMsg, lastUserMsg);
+  const threadSummary = options?.threadSnapshot?.summary || msgSummary;
 
-  // Build key exchanges (subsample: first, decision points, last 2 pairs)
-  const keyExchanges = buildKeyExchanges(messages);
+  const msgExchanges = buildKeyExchanges(messages);
+  const keyExchanges = (options?.threadSnapshot?.key_exchanges?.length ?? 0) > 0
+    ? options!.threadSnapshot!.key_exchanges
+    : msgExchanges;
 
   // Merge file ops from compaction preparation if available, with scoring
   const now = new Date();
@@ -547,7 +558,7 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
                 (/\b(turns out|gotcha:|note:|important:|discovered that|the issue was|root cause|lesson:|TIL|caveat:|warning:|beware:)\b/i.test(line) &&
                   (/^[\s]*[-*]/.test(line) || /\*\*/.test(line) || /^\s*[A-Z]/.test(line)))
               ) {
-                const trimmed = truncate(line.trim(), 200);
+                const trimmed = truncate(line.trim(), 500);
                 await appendLearningToState(runtime.stateDir, runtime.sessionKey, {
                   text: trimmed,
                   when: new Date().toISOString(),
@@ -559,6 +570,27 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
       } catch (err) {
         log.warn(`Open items/learnings capture failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+
+    // Thread snapshot: continuously update topic/summary/key_exchanges from full message history.
+    // At compaction time, preparation.messagesToSummarize only has DROPPED messages (not kept ones),
+    // so the checkpoint builder would miss recent user messages. This snapshot captures the full view.
+    try {
+      const allMessages = captureMessages;
+      const snapLastUser = findLastUserMessage(allMessages);
+      const snapFirstUser = findFirstUserMessage(allMessages);
+      const snapTopic = snapLastUser ? truncate(extractText(snapLastUser), 200) : "";
+      const snapSummary = buildThreadSummary(snapFirstUser, snapLastUser);
+      if (snapTopic) {
+        await writeThreadSnapshot(runtime.stateDir, runtime.sessionKey, {
+          topic: snapTopic,
+          summary: snapSummary,
+          key_exchanges: buildKeyExchanges(allMessages),
+          updated_at: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      log.warn(`Thread snapshot write failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // If >= 70%: inject gauge line into agent context via CustomMessage

@@ -88,7 +88,7 @@ Also refine conversation metadata:
 Produce JSON:
 {
   "topic_refined": "short topic line",
-  "next_action": "1-2 sentences: what should happen next",
+  "next_action": "1-2 sentences: what the user/agent should do NEXT (forward-looking, not describing past work)",
   "decision_summaries": ["1 clean line per decision"],
   "task_status": "in_progress|completed|blocked|waiting_for_user|abandoned",
   "open_items_refined": ["refined list, resolved items removed"],

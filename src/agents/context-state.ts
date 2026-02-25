@@ -21,6 +21,13 @@ export interface StateFiles {
   learnings: Array<{ text: string; when: string }>;
 }
 
+export interface ThreadSnapshot {
+  topic: string;
+  summary: string;
+  key_exchanges: Array<{ role: "user" | "agent"; gist: string }>;
+  updated_at: string;
+}
+
 const MAX_DECISIONS = 50;
 const MAX_THREAD = 8;
 const MAX_TOOLS = 100;
@@ -305,6 +312,26 @@ export async function readLastToolCallFromState(
   );
 }
 
+export async function writeThreadSnapshot(
+  stateDir: string,
+  sessionKey: string,
+  snapshot: ThreadSnapshot,
+): Promise<void> {
+  const dir = resolveStateDir(stateDir, sessionKey);
+  await writeJsonFile(path.join(dir, "thread_snapshot.json"), snapshot);
+}
+
+export async function readThreadSnapshot(
+  stateDir: string,
+  sessionKey: string,
+): Promise<ThreadSnapshot | null> {
+  const dir = resolveStateDir(stateDir, sessionKey);
+  return readJsonFile<ThreadSnapshot | null>(
+    path.join(dir, "thread_snapshot.json"),
+    null,
+  );
+}
+
 export async function resetStateFiles(stateDir: string, sessionKey: string): Promise<void> {
   const dir = resolveStateDir(stateDir, sessionKey);
 
@@ -317,6 +344,8 @@ export async function resetStateFiles(stateDir: string, sessionKey: string): Pro
       writeJsonFile(path.join(dir, "learnings.json"), []),
       // Clear last_tool_call so stale values don't leak across compactions
       fs.promises.unlink(path.join(dir, "last_tool_call.json")).catch(() => {}),
+      // Clear thread snapshot — will be rebuilt from post-compaction messages
+      fs.promises.unlink(path.join(dir, "thread_snapshot.json")).catch(() => {}),
     ]);
   } catch (err) {
     log.warn("Failed to reset state files", { error: String(err) });

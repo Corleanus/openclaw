@@ -20,7 +20,7 @@ import { writeCheckpoint, pruneOldCheckpoints, readLatestCheckpoint, atomicWrite
 import { enrichCheckpoint } from "../context-enrichment.js";
 import { calculateUtilization } from "../context-gauge.js";
 import { promoteLearningsToCrossSession } from "../context-learnings.js";
-import { readStateFiles, resetStateFiles, readLastToolCallFromState } from "../context-state.js";
+import { readStateFiles, resetStateFiles, readLastToolCallFromState, readThreadSnapshot } from "../context-state.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCheckpointFromState } from "./context-manager.js";
 import { getContextManagerRuntime } from "./context-manager-runtime.js";
@@ -222,6 +222,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let checkpoint: Awaited<ReturnType<typeof buildCheckpointFromState>> | undefined;
     let cpResult: Awaited<ReturnType<typeof writeCheckpoint>> | undefined;
     let latestCp: Awaited<ReturnType<typeof readLatestCheckpoint>> | undefined;
+    let threadSnapshot: Awaited<ReturnType<typeof readThreadSnapshot>> = null;
     try {
       cmRuntime = getContextManagerRuntime(ctx.sessionManager);
       if (cmRuntime) {
@@ -245,13 +246,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         if (!cmRuntime.lastToolCall) {
           log.debug("lastToolCall is null at compaction — no tool_result events captured this session segment");
         }
+        // Read thread snapshot: built from full message history during context events.
+        // preparation.messagesToSummarize only has DROPPED messages, missing recent user messages.
+        threadSnapshot = await readThreadSnapshot(cmRuntime.stateDir, cmRuntime.sessionKey);
         checkpoint = buildCheckpointFromState(
           stateFiles,
           gauge,
           cpMessages,
           cmRuntime,
           "compaction",
-          { isSplitTurn: preparation.isSplitTurn, fileOps: preparation.fileOps, compactionCount: prevCount + 1 },
+          { isSplitTurn: preparation.isSplitTurn, fileOps: preparation.fileOps, compactionCount: prevCount + 1, threadSnapshot },
         );
         cpResult = await writeCheckpoint(cmRuntime.stateDir, cmRuntime.sessionKey, checkpoint);
         if (cpResult.written) {
@@ -295,10 +299,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Enrichment: LLM-enhance the checkpoint if it was written
       if (cpResult?.written && cmRuntime && checkpoint) {
         try {
-          const enrichmentMessages = (cpMessages ?? []).map((m) => ({
+          const enrichmentMessages: Array<{ role: string; content: unknown }> = (cpMessages ?? []).map((m) => ({
             role: "role" in m ? String(m.role) : "unknown",
             content: "content" in m ? m.content : undefined,
           }));
+          // cpMessages only has DROPPED messages — supplement with snapshot key_exchanges
+          // so the enrichment LLM sees actual conversation content, not an empty context
+          if (threadSnapshot && threadSnapshot.key_exchanges.length > 0) {
+            for (const ex of threadSnapshot.key_exchanges) {
+              enrichmentMessages.push({
+                role: ex.role === "agent" ? "assistant" : "user",
+                content: ex.gist,
+              });
+            }
+          }
           const enrichment = await enrichCheckpoint(checkpoint, enrichmentMessages, model, apiKey, signal);
           if (enrichment) {
             // Apply each field independently — partial enrichment is better than none
