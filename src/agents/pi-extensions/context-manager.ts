@@ -20,7 +20,6 @@ import type {
 import {
   initStateDir,
   readStateFiles,
-  resetStateFiles,
   appendToolToState,
   appendFileToState,
 } from "../context-state.js";
@@ -55,13 +54,24 @@ function extractText(msg: AgentMessage): string {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
-    return content
+    // Extract text blocks
+    const textParts = content
       .filter(
         (b: unknown) =>
           typeof b === "object" && b !== null && (b as { type?: string }).type === "text",
       )
-      .map((b: unknown) => (b as { text?: string }).text ?? "")
-      .join("\n");
+      .map((b: unknown) => (b as { text?: string }).text ?? "");
+    if (textParts.length > 0) return textParts.join("\n");
+    // Fallback: if content is all tool calls, summarize tool names
+    const toolNames = content
+      .filter(
+        (b: unknown) =>
+          typeof b === "object" && b !== null &&
+          ((b as { type?: string }).type === "tool_use" || (b as { type?: string }).type === "tool_call"),
+      )
+      .map((b: unknown) => (b as { name?: string }).name)
+      .filter(Boolean);
+    if (toolNames.length > 0) return `[called ${toolNames.join(", ")}]`;
   }
   return "";
 }
@@ -86,15 +96,22 @@ function buildKeyExchanges(
   const exchanges: Array<{ role: "user" | "agent"; gist: string }> = [];
   const userAgentPairs: Array<{ user: AgentMessage; agent?: AgentMessage }> = [];
 
-  // Collect user-agent pairs
+  // Collect user-agent pairs — scan forward past custom/toolResult messages
+  // to find the next assistant message after each user message
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i] as { role?: string };
     if (msg?.role === "user") {
-      const next = messages[i + 1] as { role?: string } | undefined;
-      userAgentPairs.push({
-        user: messages[i],
-        agent: next?.role === "assistant" ? messages[i + 1] : undefined,
-      });
+      let agent: AgentMessage | undefined;
+      for (let j = i + 1; j < messages.length; j++) {
+        const candidate = messages[j] as { role?: string };
+        if (candidate?.role === "assistant") {
+          agent = messages[j];
+          break;
+        }
+        // Stop scanning if we hit the next user message
+        if (candidate?.role === "user") break;
+      }
+      userAgentPairs.push({ user: messages[i], agent });
     }
   }
 
@@ -286,7 +303,8 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
         );
         const result = await writeCheckpoint(runtime.stateDir, runtime.sessionKey, checkpoint);
         if (result.written) {
-          await resetStateFiles(runtime.stateDir, runtime.sessionKey);
+          // State files are NOT reset — they accumulate across the session.
+          // Each checkpoint captures a full snapshot of accumulated state.
           await pruneOldCheckpoints(runtime.stateDir, runtime.sessionKey);
           checkpointSaved = true;
         }
@@ -317,12 +335,18 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
   // tool_result event: fires after each tool call
   api.on("tool_result", async (event: ToolResultEvent, ctx: ExtensionContext) => {
     const runtime = getContextManagerRuntime(ctx.sessionManager);
-    if (!runtime) return;
+    if (!runtime) {
+      log.debug("tool_result: no runtime found for sessionManager");
+      return;
+    }
 
     const toolName = event.toolName;
+    log.debug(`tool_result: capturing tool=${toolName}`);
 
     // Capture tool name to resources
-    await appendToolToState(runtime.stateDir, runtime.sessionKey, toolName).catch(() => {});
+    await appendToolToState(runtime.stateDir, runtime.sessionKey, toolName).catch((err) => {
+      log.warn(`Failed to append tool ${toolName} to state: ${err instanceof Error ? err.message : String(err)}`);
+    });
 
     // Capture file paths from read/write/edit tools
     const input = event.input as Record<string, unknown> | undefined;
@@ -339,7 +363,9 @@ export default function contextManagerExtension(api: ExtensionAPI): void {
             ? "read"
             : "modified";
         await appendFileToState(runtime.stateDir, runtime.sessionKey, filePath, kind).catch(
-          () => {},
+          (err) => {
+            log.warn(`Failed to append file ${filePath} to state: ${err instanceof Error ? err.message : String(err)}`);
+          },
         );
       }
     }
