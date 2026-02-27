@@ -51,6 +51,7 @@ import {
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -84,6 +85,10 @@ function rejectWebchatSessionMutation(params: {
   respond: RespondFn;
 }): boolean {
   if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
+    return false;
+  }
+  // Control UI connects with mode "webchat" but should be allowed to manage sessions
+  if (params.client.connect.client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
     return false;
   }
   params.respond(

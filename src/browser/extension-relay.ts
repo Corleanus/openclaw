@@ -495,14 +495,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         return;
       }
 
-      if (path.startsWith("/json")) {
-        const token = getRelayAuthTokenFromRequest(req, url);
-        if (!token || !relayAuthTokens.has(token)) {
-          res.writeHead(401);
-          res.end("Unauthorized");
-          return;
-        }
-      }
+      // Auth removed: relay is loopback-only + origin-restricted.
 
       if (req.method === "HEAD" && path === "/") {
         res.writeHead(200);
@@ -628,11 +621,6 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (pathname === "/extension") {
-        const token = getRelayAuthTokenFromRequest(req, url);
-        if (!token || !relayAuthTokens.has(token)) {
-          rejectUpgrade(socket, 401, "Unauthorized");
-          return;
-        }
         // MV3 worker reconnect races can leave a stale non-OPEN socket reference.
         if (extensionWs && extensionWs.readyState !== WebSocket.OPEN) {
           try {
@@ -653,11 +641,6 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (pathname === "/cdp") {
-        const token = getRelayAuthTokenFromRequest(req, url);
-        if (!token || !relayAuthTokens.has(token)) {
-          rejectUpgrade(socket, 401, "Unauthorized");
-          return;
-        }
         if (!extensionConnected()) {
           rejectUpgrade(socket, 503, "Extension not connected");
           return;

@@ -511,6 +511,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       });
       voiceManagerRef.current = voiceManager;
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
+      // READY may have already fired before the listener was registered (race with
+      // gateway connect during Client construction). Explicit call is idempotent.
+      void voiceManager.autoJoin().catch((err) => {
+        runtime.error?.(danger(`discord voice: autoJoin failed: ${String(err)}`));
+      });
     }
 
     const messageHandler = createDiscordMessageHandler({

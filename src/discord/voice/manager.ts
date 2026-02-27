@@ -41,8 +41,11 @@ const require = createRequire(import.meta.url);
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
+const TRANSCRIPTION_SAMPLE_RATE = 16_000;
+const TRANSCRIPTION_CHANNELS = 1;
+const DOWNSAMPLE_RATIO = SAMPLE_RATE / TRANSCRIPTION_SAMPLE_RATE; // 3
 const MIN_SEGMENT_SECONDS = 0.35;
-const SILENCE_DURATION_MS = 1_000;
+const SILENCE_DURATION_MS = 700;
 const PLAYBACK_READY_TIMEOUT_MS = 15_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
 const DECRYPT_FAILURE_WINDOW_MS = 30_000;
@@ -128,9 +131,30 @@ function resolveVoiceTtsConfig(params: { cfg: OpenClawConfig; override?: TtsConf
   return { cfg, resolved: resolveTtsConfig(cfg) };
 }
 
-function buildWavBuffer(pcm: Buffer): Buffer {
-  const blockAlign = (CHANNELS * BIT_DEPTH) / 8;
-  const byteRate = SAMPLE_RATE * blockAlign;
+/**
+ * Downsample 48 kHz stereo PCM (16-bit LE) → 16 kHz mono PCM (16-bit LE).
+ * Simple point-sample with channel averaging — sufficient for speech.
+ */
+function downsampleToMono16k(pcm: Buffer): Buffer {
+  const bytesPerSample = BIT_DEPTH / 8;
+  const inputFrameBytes = bytesPerSample * CHANNELS; // 4 bytes (L16 + R16)
+  const inputFrames = Math.floor(pcm.length / inputFrameBytes);
+  const outputFrames = Math.floor(inputFrames / DOWNSAMPLE_RATIO);
+  const output = Buffer.alloc(outputFrames * bytesPerSample);
+
+  for (let i = 0; i < outputFrames; i++) {
+    const srcOffset = i * DOWNSAMPLE_RATIO * inputFrameBytes;
+    const left = pcm.readInt16LE(srcOffset);
+    const right = pcm.readInt16LE(srcOffset + bytesPerSample);
+    const mono = Math.round((left + right) / 2);
+    output.writeInt16LE(Math.max(-32768, Math.min(32767, mono)), i * bytesPerSample);
+  }
+  return output;
+}
+
+function buildWavBuffer(pcm: Buffer, sampleRate: number, channels: number): Buffer {
+  const blockAlign = (channels * BIT_DEPTH) / 8;
+  const byteRate = sampleRate * blockAlign;
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);
   header.writeUInt32LE(36 + pcm.length, 4);
@@ -138,8 +162,8 @@ function buildWavBuffer(pcm: Buffer): Buffer {
   header.write("fmt ", 12);
   header.writeUInt32LE(16, 16);
   header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(CHANNELS, 22);
-  header.writeUInt32LE(SAMPLE_RATE, 24);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
   header.writeUInt32LE(byteRate, 28);
   header.writeUInt16LE(blockAlign, 32);
   header.writeUInt16LE(BIT_DEPTH, 34);
@@ -219,7 +243,8 @@ function estimateDurationSeconds(pcm: Buffer): number {
 async function writeWavFile(pcm: Buffer): Promise<{ path: string; durationSeconds: number }> {
   const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "discord-voice-"));
   const filePath = path.join(tempDir, `segment-${randomUUID()}.wav`);
-  const wav = buildWavBuffer(pcm);
+  const mono16k = downsampleToMono16k(pcm);
+  const wav = buildWavBuffer(mono16k, TRANSCRIPTION_SAMPLE_RATE, TRANSCRIPTION_CHANNELS);
   await fs.writeFile(filePath, wav);
   scheduleTempCleanup(tempDir);
   return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };

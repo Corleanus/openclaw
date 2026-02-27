@@ -30,9 +30,7 @@ function deriveRelayAuthToken(gatewayToken: string, port: number): string {
 export function resolveRelayAcceptedTokensForPort(port: number): string[] {
   const gatewayToken = resolveGatewayAuthToken();
   if (!gatewayToken) {
-    throw new Error(
-      "extension relay requires gateway auth token (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
-    );
+    return [];
   }
   const relayToken = deriveRelayAuthToken(gatewayToken, port);
   if (relayToken === gatewayToken) {
