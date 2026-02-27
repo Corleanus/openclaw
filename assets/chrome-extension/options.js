@@ -26,12 +26,8 @@ function setStatus(kind, message) {
 async function checkRelayReachable(port, token) {
   const url = `http://127.0.0.1:${port}/json/version`
   const trimmedToken = String(token || '').trim()
-  if (!trimmedToken) {
-    setStatus('error', 'Gateway token required. Save your gateway token to connect.')
-    return
-  }
   try {
-    const relayToken = await deriveRelayToken(trimmedToken, port)
+    const relayToken = trimmedToken ? await deriveRelayToken(trimmedToken, port) : ''
     // Delegate the fetch to the background service worker to bypass
     // CORS preflight on the custom x-openclaw-relay-token header.
     const res = await chrome.runtime.sendMessage({

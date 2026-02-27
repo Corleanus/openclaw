@@ -31,9 +31,7 @@ export async function deriveRelayToken(gatewayToken, port) {
 export async function buildRelayWsUrl(port, gatewayToken) {
   const token = String(gatewayToken || "").trim();
   if (!token) {
-    throw new Error(
-      "Missing gatewayToken in extension settings (chrome.storage.local.gatewayToken)",
-    );
+    return `ws://127.0.0.1:${port}/extension`;
   }
   const relayToken = await deriveRelayToken(token, port);
   return `ws://127.0.0.1:${port}/extension?token=${encodeURIComponent(relayToken)}`;
