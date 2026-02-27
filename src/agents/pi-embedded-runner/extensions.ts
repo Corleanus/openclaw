@@ -1,10 +1,12 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
+import { STATE_DIR } from "../../config/paths.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
+import contextManagerBridge from "../pi-extensions/context-manager-bridge.js";
 import contextPruningExtension from "../pi-extensions/context-pruning.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
@@ -67,9 +69,29 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  sessionKey?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  if (resolveCompactionMode(params.cfg) === "safeguard") {
+
+  // Context Manager plugin bridge — if installed, replaces the built-in compaction safeguard
+  // with an enhanced version that adds structured checkpoints, LLM enrichment, and cross-session learnings.
+  const bridgeKey = Symbol.for("openclaw.contextManagerBridge");
+  const bridge = (globalThis as any)[bridgeKey];
+  if (bridge?.onInit && params.sessionKey) {
+    const contextWindowTokens = resolveContextWindowTokens(params);
+    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+    bridge.onInit(params.sessionManager, {
+      sessionKey: params.sessionKey,
+      contextWindowTokens,
+      stateDir: STATE_DIR,
+      model: params.model,
+      provider: params.provider,
+      modelId: params.modelId,
+      maxHistoryShare: compactionCfg?.maxHistoryShare,
+    });
+    factories.push(contextManagerBridge);
+  } else if (resolveCompactionMode(params.cfg) === "safeguard") {
+    // Fallback: upstream compaction safeguard (when plugin is not installed)
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
@@ -85,6 +107,7 @@ export function buildEmbeddedExtensionFactories(params: {
     });
     factories.push(compactionSafeguardExtension);
   }
+
   const pruningFactory = buildContextPruningFactory(params);
   if (pruningFactory) {
     factories.push(pruningFactory);
